@@ -63,6 +63,9 @@ def read_epub(path):
         except (KeyError, AttributeError):
             opf = ""
         meta = opf[opf.find("<metadata"):opf.find("</metadata>")] if "<metadata" in opf else ""
+        for key in ("publisher", "rights", "date"):
+            m = re.search(r"<dc:%s[^>]*>([^<]+)<" % key, meta)
+            info[key] = html.unescape(m.group(1)).strip() if m else None
         lang = re.search(r"<dc:language[^>]*>([^<]+)<", meta)
         info["language"] = norm_lang(lang.group(1)) if lang else None
         for ident in re.findall(r"<dc:identifier[^>]*>([^<]+)<", meta):
@@ -260,3 +263,63 @@ def better_cover(current, candidate):
     if color is False:
         return True
     return cw * ch > 1.5 * w * h and min(cw, ch) >= 500
+
+
+# ---------------------------------------------------------------- Einheitliche Regeln
+# Werden bei jedem Import und bei „Online ergänzen“ angewendet und in die EPUB geschrieben.
+# RULES_VERSION erhöhen, wenn sich Regeln ändern -> beim nächsten Start werden alle Bücher neu angeglichen.
+RULES_VERSION = 1
+
+LEGAL_FORMS = r"(?:GmbH\s*&\s*Co\.?\s*KG|GmbH|mbH|KG|AG|e\.\s?K\.|Ltd\.?|Limited|Inc\.?|LLC|S\.?p\.?A\.?|S\.?r\.?l\.?)"
+# Konzern-/Gruppennamen: hier steht nicht der eigentliche Verlag (Imprint)
+GROUP_PATTERN = re.compile(r"Verlagsgruppe|Random House|Bonnier Media|Holtzbrinck|Ullstein Buchverlage|"
+                           r"HarperCollins Publishers|Hachette Livre|Macmillan Publishers", re.I)
+KEEP_IDENTIFIERS = ("isbn",)
+
+
+def publisher_core(name):
+    """Vergleichsform: ohne Rechtsform, 'Verlag', Vornamen-Präfix. 'Wilhelm Heyne Verlag GmbH' -> 'heyne'."""
+    core = re.sub(r"\b" + LEGAL_FORMS + r"(?=\s|$|,)", "", name or "", flags=re.I)
+    core = re.sub(r"\b(?:verlag|verlage|buchverlag|verlagshaus|publishing|publishers?|books|edition)\b", "", core, flags=re.I)
+    return re.sub(r"[^a-zäöüß0-9 ]+", " ", core.lower()).split()
+
+
+def clean_publisher(name):
+    name = re.sub(r",?\s*\b" + LEGAL_FORMS + r"\s*$", "", (name or "").strip(), flags=re.I)
+    name = re.sub(r",?\s*(?:München|Berlin|Hamburg|Köln|Frankfurt(?: am Main)?|Stuttgart)\s*$", "", name)
+    return name.strip(" ,")
+
+
+def imprint_from_rights(rights):
+    """'Copyright © 2024 … by Wilhelm Heyne Verlag, München' -> 'Wilhelm Heyne Verlag'."""
+    m = re.search(r"(?:by|bei|im|©\s*\d{4})\s+((?:[A-ZÄÖÜ][\w.&-]*\s+){0,3}Verlag(?:\s+GmbH)?)", rights or "")
+    return clean_publisher(m.group(1)) if m else None
+
+
+def choose_publisher(online, epub_pub, rights, current, known):
+    """Imprint statt Konzern; vorhandene Schreibweise aus der Bibliothek wiederverwenden."""
+    candidates = [online, imprint_from_rights(rights), epub_pub, current]
+    pick = next((c for c in candidates if c and not GROUP_PATTERN.search(c)), None) or current or online or epub_pub
+    if not pick:
+        return None
+    pick = clean_publisher(pick)
+    core = publisher_core(pick)
+    if core:
+        for k in sorted(known, key=len):
+            kc = publisher_core(k)
+            if kc and not GROUP_PATTERN.search(k) and core[-len(kc):] == kc:
+                return k
+    return pick
+
+
+def year_of(value):
+    m = re.match(r"\s*(\d{4})", str(value or ""))
+    if m and 1450 <= int(m.group(1)) <= 2100:
+        return int(m.group(1))
+    return None
+
+
+def normalize_pubdate(online_date, epub_date, current):
+    """Nur das Erscheinungsjahr (Online > EPUB > vorhanden), einheitlich als 1. Januar."""
+    year = year_of(online_date) or year_of(epub_date) or year_of(current)
+    return "%d-01-01T12:00:00+00:00" % year if year else None

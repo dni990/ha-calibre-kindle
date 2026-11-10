@@ -272,17 +272,28 @@ def enrich_book(library, book_id, auto=False):
                 if cover:
                     os.remove(cover)
                 cover = again_cover
-    if isbn and idents.get("isbn") != isbn:
-        idents["isbn"] = isbn
-        changes["identifiers"] = ",".join("%s:%s" % kv for kv in idents.items())
+    # Kennungen: nur ISBN behalten (mobi-asin u. Ä. aus Onleihe-Dateien sind Fantasiewerte)
+    wanted = {k: v for k, v in idents.items() if k in enrich.KEEP_IDENTIFIERS}
+    if isbn:
+        wanted["isbn"] = isbn
+    if wanted != idents and wanted:
+        changes["identifiers"] = ",".join("%s:%s" % kv for kv in sorted(wanted.items()))
 
     comments = b.get("comments") or online.get("comments")
     if not b.get("comments") and online.get("comments"):
         changes["comments"] = online["comments"]
-    if not b.get("publisher") and online.get("publisher"):
-        changes["publisher"] = online["publisher"]
-    if online.get("pubdate") and (auto or not b.get("pubdate") or str(b.get("pubdate")).startswith("0101")):
-        changes["pubdate"] = online["pubdate"]
+
+    # Verlag: Imprint statt Konzern, einheitliche Schreibweise
+    known = {x.get("publisher") for x in list_books(library) if x.get("publisher") and x.get("id") != book_id}
+    publisher = enrich.choose_publisher(online.get("publisher"), info.get("publisher"), info.get("rights"),
+                                        b.get("publisher"), known)
+    if publisher and publisher != b.get("publisher"):
+        changes["publisher"] = publisher
+
+    # Erscheinungsdatum: nur Jahr
+    pubdate = enrich.normalize_pubdate(online.get("pubdate"), info.get("date"), b.get("pubdate"))
+    if pubdate and not str(b.get("pubdate") or "").startswith(pubdate[:10] + "T12:00"):
+        changes["pubdate"] = pubdate
     if not current_langs and not lang and online.get("language"):
         changes["languages"] = online["language"]
 

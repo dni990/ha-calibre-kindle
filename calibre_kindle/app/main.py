@@ -164,11 +164,39 @@ def process(job):
         info = pipeline.book(library, job["book_id"])
         update(job, "fertig", ("Ergänzt: " + ", ".join(changed)) if changed else "Nichts Neues gefunden",
                label=info["title"])
+    elif job["kind"] == "normalize_all":
+        books = pipeline.list_books(library)
+        for n, b in enumerate(books, 1):
+            update(job, "läuft", "Buch %d von %d: %s" % (n, len(books), b.get("title")))
+            try:
+                pipeline.enrich_book(library, b["id"], auto=True)
+            except Exception as err:  # noqa: BLE001 – nächstes Buch trotzdem
+                log.warning("Angleichen von #%s fehlgeschlagen: %s", b["id"], err)
+        save_rules_version()
+        update(job, "fertig", "%d Bücher einheitlich gemacht" % len(books))
     elif job["kind"] == "resend":
         info = pipeline.book(library, job["book_id"])
         update(job, label=info["title"])
         target = deliver(job, info)
         update(job, "fertig", "An %s gesendet" % target["name"])
+
+
+RULES_FILE = "/data/rules_version"
+
+
+def save_rules_version():
+    import enrich
+    with open(RULES_FILE, "w") as f:
+        f.write(str(enrich.RULES_VERSION))
+
+
+def rules_outdated():
+    import enrich
+    try:
+        with open(RULES_FILE) as f:
+            return int(f.read().strip()) < enrich.RULES_VERSION
+    except (OSError, ValueError):
+        return True
 
 
 def worker():
@@ -268,6 +296,11 @@ def book_meta(book_id):
 def book_enrich(book_id):
     job = new_job("enrich", "Buch #%d" % book_id, book_id=book_id)
     return jsonify(job=job)
+
+
+@app.post("/api/normalize")
+def normalize_all():
+    return jsonify(job=new_job("normalize_all", "Alle Bücher vereinheitlichen"))
 
 
 @app.delete("/api/book/<int:book_id>")
@@ -374,6 +407,9 @@ if __name__ == "__main__":
     cleanup_inbox()
     pipeline.ensure_plugins()
     threading.Thread(target=worker, daemon=True).start()
+    if rules_outdated() and os.path.exists(os.path.join(options()["library_path"], "metadata.db")):
+        log.info("Metadaten-Regeln geändert – gleiche alle Bücher an")
+        new_job("normalize_all", "Alle Bücher vereinheitlichen")
     threading.Thread(target=refresh_adobe_status, daemon=True).start()
     log.info("Web-Oberfläche läuft auf Port 8099 (Ingress)")
     app.run(host="0.0.0.0", port=8099, threaded=True)
