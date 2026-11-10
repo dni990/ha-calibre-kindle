@@ -116,19 +116,77 @@ def calibredb(library, *args, timeout=600):
     return run(["calibredb", "--library-path", library, *args], timeout=timeout)
 
 
-def list_books(library, limit=40):
+LIST_FIELDS = ("id,title,authors,series,series_index,languages,pubdate,publisher,tags,"
+               "formats,timestamp,identifiers,cover,rating")
+_cache = {"version": 0, "books": None}
+
+
+def library_version():
+    return _cache["version"]
+
+
+def invalidate():
+    _cache["version"] += 1
+    _cache["books"] = None
+
+
+def list_books(library):
+    """Alle Bücher (gecacht, bis sich die Bibliothek ändert)."""
+    if _cache["books"] is not None:
+        return _cache["books"]
     if not os.path.exists(os.path.join(library, "metadata.db")):
         return []
-    rc, out = calibredb(library, "list", "--for-machine", "--fields",
-                        "id,title,authors,formats,timestamp", "--sort-by", "timestamp",
-                        "--limit", str(limit))
+    rc, out = calibredb(library, "list", "--for-machine", "--fields", LIST_FIELDS,
+                        "--sort-by", "timestamp")
     if rc != 0:
         log.warning("calibredb list fehlgeschlagen: %s", out[-500:])
         return []
     try:
-        return json.loads(out[out.index("["):])
+        books = json.loads(out[out.index("["):])
     except ValueError:
         return []
+    _cache["books"] = books
+    return books
+
+
+def book_details(library, book_id):
+    rc, out = calibredb(library, "list", "--for-machine", "--fields", LIST_FIELDS + ",comments",
+                        "--search", "id:%d" % book_id)
+    try:
+        rows = json.loads(out[out.index("["):])
+    except ValueError:
+        rows = []
+    if not rows:
+        raise PipelineError("Buch %d nicht gefunden" % book_id)
+    return rows[0]
+
+
+EDITABLE = {"title", "authors", "series", "series_index", "languages", "publisher",
+            "pubdate", "tags", "comments"}
+
+
+def set_metadata(library, book_id, fields):
+    args = []
+    for key, value in fields.items():
+        if key not in EDITABLE:
+            continue
+        value = "" if value is None else str(value).strip()
+        if key == "series_index" and not value:
+            value = "1"
+        args += ["-f", "%s:%s" % (key, value)]
+    if not args:
+        return
+    rc, out = calibredb(library, "set_metadata", str(book_id), *args)
+    invalidate()
+    if rc != 0:
+        raise PipelineError("Metadaten konnten nicht gespeichert werden:\n" + tail(out))
+
+
+def remove_book(library, book_id):
+    rc, out = calibredb(library, "remove", str(book_id))
+    invalidate()
+    if rc != 0:
+        raise PipelineError("Löschen fehlgeschlagen:\n" + tail(out))
 
 
 def book(library, book_id):
@@ -170,6 +228,7 @@ def import_book(library, path):
     """Fügt die Datei hinzu. DeACSM/DeDRM laufen dabei als Import-Plugins."""
     os.makedirs(library, exist_ok=True)
     rc, out = calibredb(library, "add", path, timeout=900)
+    invalidate()
     match = re.search(r"Added book ids?:\s*([\d, ]+)", out)
     if not match:
         if "already exist" in out:
@@ -182,11 +241,13 @@ def import_book(library, path):
     real = [f for f in formats if not f.lower().endswith(".acsm")]
     if not real:
         calibredb(library, "remove", str(book_id))
+        invalidate()
         raise PipelineError("Die ACSM-Datei konnte nicht eingelöst werden. Ist ein Adobe-Konto "
                             "verknüpft und wurde die ACSM noch nicht anderweitig benutzt?\n" + tail(out))
     locked = [f for f in real if still_drm(f)]
     if locked:
         calibredb(library, "remove", str(book_id))
+        invalidate()
         raise PipelineError("DRM konnte nicht entfernt werden – passender Adobe-Schlüssel fehlt "
                             "(bei Büchern aus einem bestehenden ADE-Konto adobekey.der hochladen).\n"
                             + tail(out))

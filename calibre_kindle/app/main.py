@@ -9,7 +9,7 @@ import time
 import uuid
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request, send_file
 
 import pipeline
 from pipeline import PipelineError
@@ -180,14 +180,68 @@ def state():
         job_list = list(jobs)
     return jsonify(
         jobs=job_list,
-        books=pipeline.list_books(opts["library_path"]),
-        senders=[s["name"] for s in opts.get("senders", [])],
+        library_version=pipeline.library_version(),
+        senders=[{"name": s["name"], "from": s["from_address"]} for s in opts.get("senders", [])],
         default_sender=opts.get("default_sender"),
         auto_send=opts.get("auto_send", True),
         kindle_email=opts.get("kindle_email", ""),
+        library_path=opts["library_path"],
         adobe=adobe_status,
         adept_keys=pipeline.adept_key_names(),
     )
+
+
+def public_book(b):
+    b = dict(b)
+    b["has_cover"] = bool(b.pop("cover", None))
+    b["formats"] = [os.path.splitext(f)[1].lstrip(".").upper() for f in b.get("formats") or []]
+    return b
+
+
+@app.get("/api/books")
+def books():
+    lib = options()["library_path"]
+    return jsonify(version=pipeline.library_version(),
+                   books=[public_book(b) for b in pipeline.list_books(lib)])
+
+
+@app.get("/api/book/<int:book_id>")
+def book_detail(book_id):
+    try:
+        return jsonify(public_book(pipeline.book_details(options()["library_path"], book_id)))
+    except PipelineError as err:
+        return jsonify(error=str(err)), 404
+
+
+@app.post("/api/book/<int:book_id>/meta")
+def book_meta(book_id):
+    try:
+        pipeline.set_metadata(options()["library_path"], book_id, request.get_json(silent=True) or {})
+    except PipelineError as err:
+        return jsonify(error=str(err)), 400
+    return jsonify(ok=True)
+
+
+@app.delete("/api/book/<int:book_id>")
+def book_delete(book_id):
+    try:
+        pipeline.remove_book(options()["library_path"], book_id)
+    except PipelineError as err:
+        return jsonify(error=str(err)), 400
+    return jsonify(ok=True)
+
+
+@app.get("/api/cover/<int:book_id>")
+def cover(book_id):
+    lib = options()["library_path"]
+    for b in pipeline.list_books(lib):
+        if b["id"] == book_id and b.get("cover"):
+            path = os.path.realpath(b["cover"])
+            if path.startswith(os.path.realpath(lib) + os.sep) and os.path.exists(path):
+                resp = send_file(path, mimetype="image/jpeg")
+                resp.headers["Cache-Control"] = "max-age=86400"
+                return resp
+    abort(404)
 
 
 @app.post("/api/upload")
