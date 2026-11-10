@@ -222,8 +222,7 @@ def resend(book_id):
 @app.post("/api/adobe/auth")
 def adobe_auth():
     data = request.get_json(silent=True) or {}
-    res = pipeline.adobe("auth", data.get("mail", ""), data.get("password", ""),
-                         data.get("version", ""))
+    res = pipeline.adobe("auth", data.get("version", ""))
     refresh_adobe_status()
     return jsonify(res), (200 if res.get("ok") else 400)
 

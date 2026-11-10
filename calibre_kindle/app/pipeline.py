@@ -50,10 +50,9 @@ def ensure_plugins():
             log.info("Plugin %s installiert", zip_name)
 
 
-def adobe(action, mail="", password="", version=""):
+def adobe(action, version=""):
     rc, out = run(["calibre-debug", "-e", "/app/adobe_auth.py"], timeout=180,
-                  env={"ADOBE_ACTION": action, "ADOBE_MAIL": mail, "ADOBE_PASS": password,
-                       "ADOBE_VERSION": version})
+                  env={"ADOBE_ACTION": action, "ADOBE_VERSION": version})
     data = None
     for line in reversed(out.splitlines()):
         if line.startswith("RESULT:"):

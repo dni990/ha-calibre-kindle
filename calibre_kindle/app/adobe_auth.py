@@ -2,7 +2,9 @@
 
 Wird mit `calibre-debug -e /app/adobe_auth.py` gestartet, damit Calibres
 Python und Plugin-Umgebung verfügbar sind. Parameter kommen über Umgebungs-
-variablen: ADOBE_MAIL, ADOBE_PASS (leer = anonym), ADOBE_ACTION (auth|status).
+variablen: ADOBE_ACTION (auth|status), ADOBE_VERSION (optional).
+Adobe hat die Anmeldung mit Adobe-ID für ADE abgeschaltet
+(E_ADEPT_RESET_PW_REQUIRED), daher wird nur noch anonym autorisiert.
 Gibt am Ende genau eine JSON-Zeile mit Präfix "RESULT:" aus.
 """
 import json
@@ -26,7 +28,7 @@ try:
 
     from libadobe import (createDeviceKeyFile, update_account_path,
                           VAR_VER_BUILD_IDS, VAR_VER_DEFAULT_BUILD_ID, VAR_VER_SUPP_CONFIG_NAMES)
-    from libadobeAccount import (createDeviceFile, getAuthMethodsAndCert, createUser,
+    from libadobeAccount import (createDeviceFile, createUser,
                                  signIn, activateDevice, getAccountUUID,
                                  exportAccountEncryptionKeyBytes)
 except Exception:
@@ -55,24 +57,19 @@ if action == "status":
 if action == "auth":
     if os.path.exists(os.path.join(account_dir, "activation.xml")):
         result(ok=False, error="Es ist bereits ein Adobe-Konto verknüpft.")
-    mail = os.environ.get("ADOBE_MAIL", "").strip()
-    passwd = os.environ.get("ADOBE_PASS", "")
     wanted = os.environ.get("ADOBE_VERSION", "")
     if wanted in VAR_VER_SUPP_CONFIG_NAMES:
         vers_idx = VAR_VER_SUPP_CONFIG_NAMES.index(wanted)
     else:
         vers_idx = VAR_VER_BUILD_IDS.index(VAR_VER_DEFAULT_BUILD_ID)  # ADE 2.0.1
-    print("Autorisiere als %s, Konto: %s" % (VAR_VER_SUPP_CONFIG_NAMES[vers_idx], mail or "anonym"))
+    print("Autorisiere anonym als %s" % VAR_VER_SUPP_CONFIG_NAMES[vers_idx])
     try:
-        auth_cert = None
-        if mail:
-            _types, auth_cert = getAuthMethodsAndCert()
         createDeviceKeyFile()
         createDeviceFile(False, vers_idx)
-        ok, resp = createUser(vers_idx, auth_cert)
+        ok, resp = createUser(vers_idx, None)
         if not ok:
             raise RuntimeError("createUser: %s" % resp)
-        ok, resp = signIn("AdobeID", mail, passwd) if mail else signIn("anonymous", "", "")
+        ok, resp = signIn("anonymous", "", "")
         if not ok:
             raise RuntimeError("Login fehlgeschlagen: %s" % resp)
         ok, resp = activateDevice(vers_idx, None)
@@ -87,6 +84,6 @@ if action == "auth":
                 pass
         result(ok=False, error=str(err), detail=traceback.format_exc())
     result(ok=True, authorized=True, uuid=getAccountUUID(), key=current_key(),
-           account=mail or "anonym")
+           account="anonym")
 
 result(ok=False, error="Unbekannte Aktion %s" % action)

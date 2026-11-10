@@ -75,14 +75,12 @@
     <h2>Adobe-DRM einrichten</h2>
     <div id="adobe" class="muted">Prüfe …</div>
     <details id="adobe-setup">
-      <summary>Adobe-Konto verknüpfen (für .acsm-Dateien)</summary>
-      <p class="muted">Am besten die Adobe-ID, mit der du bisher Adobe Digital Editions genutzt hast –
-        dann lassen sich auch ältere, schon heruntergeladene Bücher entschlüsseln. Leer lassen = anonym.</p>
+      <summary>Adobe autorisieren (für .acsm-Dateien)</summary>
+      <p class="muted">Adobe unterstützt die Anmeldung mit Adobe-ID für Digital Editions nicht mehr.
+        Das Add-on autorisiert sich deshalb anonym – damit lassen sich neue .acsm-Dateien einlösen.</p>
       <div class="row">
-        <input id="amail" type="email" placeholder="Adobe-ID (E-Mail)" autocomplete="off">
-        <input id="apass" type="password" placeholder="Passwort" autocomplete="off">
         <select id="aver"><option>ADE 2.0.1</option><option>ADE 3.0.1</option><option>ADE 4.5.11</option></select>
-        <button id="aauth">Verknüpfen</button>
+        <button id="aauth">Anonym autorisieren</button>
       </div>
       <pre id="aresult"></pre>
     </details>
@@ -132,8 +130,8 @@ function renderAdobe(s) {
   const a = s.adobe, keys = s.adept_keys;
   let html = "";
   if (!a.checked) html = "Prüfe Adobe-Status …";
-  else if (a.authorized) html = `<span class="status-ok">✔ Adobe-Konto verknüpft</span>`;
-  else html = `<span class="status-bad">✖ Kein Adobe-Konto verknüpft</span> – nötig für .acsm-Dateien.`;
+  else if (a.authorized) html = `<span class="status-ok">✔ Adobe autorisiert (anonym)</span>`;
+  else html = `<span class="status-bad">✖ Noch nicht autorisiert</span> – nötig für .acsm-Dateien.`;
   html += `<br>DeDRM-Schlüssel: ${keys.length ? esc(keys.join(", ")) : "keine"}`;
   $("adobe").innerHTML = html;
   $("adobe-setup").style.display = a.authorized ? "none" : "";
@@ -186,9 +184,9 @@ $("books").addEventListener("click", async e => {
 $("aauth").addEventListener("click", async () => {
   $("aauth").disabled = true; $("aresult").textContent = "Verbinde mit Adobe …";
   try {
-    const r = await api("api/adobe/auth", { method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ mail: $("amail").value, password: $("apass").value, version: $("aver").value }) });
-    $("aresult").textContent = "Verknüpft: " + r.account; $("apass").value = "";
+    await api("api/adobe/auth", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ version: $("aver").value }) });
+    $("aresult").textContent = "Autorisiert.";
   } catch (e) { $("aresult").textContent = "Fehler: " + e.message + (e.log ? "\n\n" + e.log : ""); }
   $("aauth").disabled = false; refresh();
 });

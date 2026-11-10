@@ -34,12 +34,15 @@ senders:
 ```
 Gmail: App-Passwort unter https://myaccount.google.com/apppasswords erstellen (2-Faktor muss aktiv sein).
 
-### 2. Adobe-Konto
-Im Panel unter „Adobe-DRM einrichten“:
-- **Adobe-Konto verknüpfen** – für `.acsm`-Dateien. Am besten dieselbe Adobe-ID wie früher in Adobe
-  Digital Editions; dann lassen sich auch ältere Downloads entschlüsseln. Achtung: belegt eine der
-  Geräte-Aktivierungen deiner Adobe-ID.
-- **adobekey.der hochladen** – falls du schon einen Schlüssel aus einer alten DeDRM-Installation hast.
+### 2. Adobe autorisieren
+Adobe hat die Anmeldung mit Adobe-ID für Adobe Digital Editions abgeschaltet
+(`E_ADEPT_RESET_PW_REQUIRED`). Das Add-on autorisiert sich daher **anonym**:
+Panel → „Adobe-DRM einrichten“ → **Anonym autorisieren**. Damit lassen sich neue `.acsm`-Dateien
+einlösen und entschlüsseln.
+
+Bücher, die früher mit einer Adobe-ID in ADE geladen wurden, brauchen den alten Schlüssel:
+`adobekey.der` aus einer bestehenden DeDRM-/ADE-Installation exportieren und im Panel hochladen –
+oder das Buch beim Shop neu herunterladen (neue `.acsm`).
 
 ## Benutzung
 Panel „Bücher“ → Datei hochladen (`.acsm`, `.epub`, `.pdf`). Der Fortschritt steht unter „Aufträge“.
