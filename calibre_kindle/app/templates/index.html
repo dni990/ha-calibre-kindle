@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bücher</title>
+<style>
+  :root { --bg:#fafafa; --card:#fff; --fg:#212121; --muted:#727272; --line:#e0e0e0;
+          --accent:#03a9f4; --ok:#43a047; --err:#db4437; --warn:#ff9800; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --card:#1c1c1c; --fg:#e1e1e1; --muted:#9b9b9b; --line:#333; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.45 Roboto, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 16px; display:grid; gap:16px; }
+  section { background:var(--card); border-radius:12px; padding:16px;
+            box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  h1 { font-size:22px; margin:4px 0 0; } h2 { font-size:16px; margin:0 0 12px; }
+  .muted { color:var(--muted); font-size:13px; }
+  #drop { border:2px dashed var(--line); border-radius:10px; padding:28px 12px; text-align:center;
+          cursor:pointer; transition:.15s; }
+  #drop.over { border-color:var(--accent); background:rgba(3,169,244,.08); }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:12px; }
+  select, input[type=text], input[type=email], input[type=password] {
+    background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+    padding:8px 10px; font:inherit; min-width:0; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:8px 14px;
+           font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); padding:5px 10px; }
+  button:disabled { opacity:.5; cursor:default; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:10px 0; border-top:1px solid var(--line); display:flex; gap:10px; align-items:flex-start; }
+  li:first-child { border-top:0; }
+  li .grow { flex:1; min-width:0; }
+  .title { font-weight:500; overflow-wrap:anywhere; }
+  .pill { font-size:12px; border-radius:10px; padding:1px 8px; color:#fff; white-space:nowrap; }
+  .fertig { background:var(--ok); } .fehler { background:var(--err); }
+  .läuft, .wartet { background:var(--warn); }
+  pre { white-space:pre-wrap; font-size:12px; color:var(--muted); margin:4px 0 0; max-height:9em; overflow:auto; }
+  .status-ok { color:var(--ok); } .status-bad { color:var(--err); }
+  details summary { cursor:pointer; color:var(--accent); margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <div><h1>📚 Bücher</h1>
+    <div class="muted">ACSM-, EPUB- oder PDF-Datei hochladen → DRM wird entfernt → Calibre-Bibliothek → Kindle</div></div>
+
+  <section>
+    <h2>Hochladen</h2>
+    <label id="drop">
+      <input id="file" type="file" multiple hidden accept=".acsm,.epub,.pdf,.azw3,.mobi,.docx,.txt">
+      <div>Datei hierher ziehen oder <b>tippen zum Auswählen</b></div>
+      <div class="muted">.acsm · .epub · .pdf</div>
+    </label>
+    <div class="row">
+      <label><input id="send" type="checkbox" checked> an Kindle senden</label>
+      <label>Absender <select id="sender"></select></label>
+      <span id="kindle" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Aufträge</h2>
+    <ul id="jobs"><li class="muted">Noch nichts hochgeladen.</li></ul>
+  </section>
+
+  <section>
+    <h2>Bibliothek <span class="muted">(zuletzt hinzugefügt)</span></h2>
+    <ul id="books"><li class="muted">Lade …</li></ul>
+  </section>
+
+  <section>
+    <h2>Adobe-DRM einrichten</h2>
+    <div id="adobe" class="muted">Prüfe …</div>
+    <details id="adobe-setup">
+      <summary>Adobe-Konto verknüpfen (für .acsm-Dateien)</summary>
+      <p class="muted">Am besten die Adobe-ID, mit der du bisher Adobe Digital Editions genutzt hast –
+        dann lassen sich auch ältere, schon heruntergeladene Bücher entschlüsseln. Leer lassen = anonym.</p>
+      <div class="row">
+        <input id="amail" type="email" placeholder="Adobe-ID (E-Mail)" autocomplete="off">
+        <input id="apass" type="password" placeholder="Passwort" autocomplete="off">
+        <button id="aauth">Verknüpfen</button>
+      </div>
+      <pre id="aresult"></pre>
+    </details>
+    <details>
+      <summary>Vorhandenen Adobe-Schlüssel (adobekey.der) hochladen</summary>
+      <p class="muted">Für EPUB/PDF, die du früher mit Adobe Digital Editions geladen hast. Den Schlüssel
+        bekommst du aus deiner alten Calibre-DeDRM-Installation (Plugin-Einstellungen → Adobe Digital Editions ebooks → Export).</p>
+      <div class="row"><input id="keyfile" type="file" accept=".der"><button id="keyup">Hochladen</button></div>
+      <pre id="keyresult"></pre>
+    </details>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let senderInit = false;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function renderJobs(jobs) {
+  if (!jobs.length) return;
+  $("jobs").innerHTML = jobs.slice(0, 15).map(j => `
+    <li><div class="grow"><div class="title">${esc(j.label)}</div>
+      <div class="muted">${new Date(j.created*1000).toLocaleString("de-DE")}</div>
+      ${j.state === "fehler" ? `<pre>${esc(j.message)}</pre>` : `<div class="muted">${esc(j.message)}</div>`}</div>
+      <span class="pill ${esc(j.state)}">${esc(j.state)}</span></li>`).join("");
+}
+
+function renderBooks(books) {
+  if (!books.length) { $("books").innerHTML = '<li class="muted">Bibliothek ist noch leer.</li>'; return; }
+  $("books").innerHTML = books.map(b => {
+    const fmts = (b.formats || []).map(f => f.split(".").pop().toUpperCase()).join(" · ");
+    const authors = Array.isArray(b.authors) ? b.authors.join(", ") : (b.authors || "");
+    return `<li><div class="grow"><div class="title">${esc(b.title)}</div>
+      <div class="muted">${esc(authors)} · ${esc(fmts)}</div></div>
+      <button class="ghost" data-id="${b.id}">An Kindle</button></li>`;
+  }).join("");
+}
+
+function renderAdobe(s) {
+  const a = s.adobe, keys = s.adept_keys;
+  let html = "";
+  if (!a.checked) html = "Prüfe Adobe-Status …";
+  else if (a.authorized) html = `<span class="status-ok">✔ Adobe-Konto verknüpft</span>`;
+  else html = `<span class="status-bad">✖ Kein Adobe-Konto verknüpft</span> – nötig für .acsm-Dateien.`;
+  html += `<br>DeDRM-Schlüssel: ${keys.length ? esc(keys.join(", ")) : "keine"}`;
+  $("adobe").innerHTML = html;
+  $("adobe-setup").style.display = a.authorized ? "none" : "";
+  if (a.checked && !a.authorized && !keys.length) $("adobe-setup").open = true;
+}
+
+async function refresh() {
+  try {
+    const s = await api("api/state");
+    if (!senderInit) {
+      $("sender").innerHTML = s.senders.map(n => `<option ${n===s.default_sender?"selected":""}>${esc(n)}</option>`).join("");
+      $("send").checked = s.auto_send;
+      senderInit = true;
+    }
+    $("kindle").textContent = s.kindle_email ? "→ " + s.kindle_email : "⚠ Kindle-Adresse fehlt in den Optionen";
+    renderJobs(s.jobs); renderBooks(s.books); renderAdobe(s);
+    const busy = s.jobs.some(j => j.state === "wartet" || j.state === "läuft");
+    setTimeout(refresh, busy || !s.adobe.checked ? 2000 : 10000);
+  } catch (e) { setTimeout(refresh, 5000); }
+}
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("file", f);
+  fd.append("send", $("send").checked ? "1" : "0");
+  fd.append("sender", $("sender").value);
+  $("drop").firstElementChild.nextElementSibling.textContent = "Lade hoch …";
+  try { await api("api/upload", { method: "POST", body: fd }); }
+  catch (e) { alert(e.message); }
+  $("drop").firstElementChild.nextElementSibling.innerHTML = "Datei hierher ziehen oder <b>tippen zum Auswählen</b>";
+  $("file").value = "";
+  refresh();
+}
+
+$("file").addEventListener("change", e => uploadFiles(e.target.files));
+["dragenter","dragover"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave","drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", e => uploadFiles(e.dataTransfer.files));
+
+$("books").addEventListener("click", async e => {
+  const id = e.target.dataset.id; if (!id) return;
+  e.target.disabled = true;
+  try { await api("api/resend/" + id, { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ sender: $("sender").value }) }); }
+  catch (err) { alert(err.message); }
+  refresh();
+});
+
+$("aauth").addEventListener("click", async () => {
+  $("aauth").disabled = true; $("aresult").textContent = "Verbinde mit Adobe …";
+  try {
+    const r = await api("api/adobe/auth", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ mail: $("amail").value, password: $("apass").value }) });
+    $("aresult").textContent = "Verknüpft: " + r.account; $("apass").value = "";
+  } catch (e) { $("aresult").textContent = "Fehler: " + e.message; }
+  $("aauth").disabled = false; refresh();
+});
+
+$("keyup").addEventListener("click", async () => {
+  const f = $("keyfile").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { const r = await api("api/adobe/key", { method: "POST", body: fd });
+        $("keyresult").textContent = r.added ? "Schlüssel gespeichert." : "Schlüssel war schon vorhanden."; }
+  catch (e) { $("keyresult").textContent = "Fehler: " + e.message; }
+  refresh();
+});
+
+refresh();
+</script>
+</body>
+</html>
