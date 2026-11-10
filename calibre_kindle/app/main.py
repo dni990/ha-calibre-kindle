@@ -201,13 +201,21 @@ def upload():
     created = []
     for f in files:
         name = os.path.basename(f.filename or "upload")
-        ext = os.path.splitext(name)[1].lower()
-        if ext not in pipeline.BOOK_EXTS:
-            return jsonify(error="Dateityp %s wird nicht unterstützt" % ext), 400
         target_dir = os.path.join(INBOX, uuid.uuid4().hex[:8])
         os.makedirs(target_dir)
         path = os.path.join(target_dir, name)
         f.save(path)
+        # iOS benennt Dateien teils um ("URLLink.acsm 2") -> Typ am Inhalt erkennen
+        ext = pipeline.detect_ext(path) or os.path.splitext(name)[1].lower()
+        if ext not in pipeline.BOOK_EXTS:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            return jsonify(error="Dateityp von %s wird nicht unterstützt" % name), 400
+        if not name.lower().endswith(ext):
+            fixed = os.path.join(target_dir, os.path.splitext(name)[0].rstrip(". ") + ext)
+            if fixed.endswith(ext + ext):
+                fixed = fixed[: -len(ext)]
+            os.rename(path, fixed)
+            path = fixed
         created.append(new_job("upload", name, path=path, send=send, sender=snd))
     return jsonify(jobs=created)
 

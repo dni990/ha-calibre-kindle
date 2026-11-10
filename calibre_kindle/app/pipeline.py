@@ -97,6 +97,19 @@ def adept_key_names():
     return list(load_dedrm_prefs().get("adeptkeys", {}).keys())
 
 
+def detect_ext(path):
+    """Dateityp anhand der ersten Bytes bestimmen (None = unbekannt)."""
+    with open(path, "rb") as f:
+        head = f.read(2048)
+    if b"<fulfillmentToken" in head:
+        return ".acsm"
+    if head.startswith(b"%PDF"):
+        return ".pdf"
+    if head.startswith(b"PK") and b"mimetypeapplication/epub+zip" in head:
+        return ".epub"
+    return None
+
+
 # ---------------------------------------------------------------- Bibliothek
 
 def calibredb(library, *args, timeout=600):
