@@ -251,6 +251,22 @@ def book_delete(book_id):
     return jsonify(ok=True)
 
 
+@app.get("/api/book/<int:book_id>/file/<fmt>")
+def book_file(book_id, fmt):
+    lib = options()["library_path"]
+    try:
+        info = pipeline.book(lib, book_id)
+    except PipelineError:
+        abort(404)
+    for path in info.get("formats") or []:
+        if path.lower().endswith("." + fmt.lower()):
+            real = os.path.realpath(path)
+            if real.startswith(os.path.realpath(lib) + os.sep) and os.path.exists(real):
+                name = pipeline.safe_filename(info.get("title", "Buch")) + "." + fmt.lower()
+                return send_file(real, as_attachment=True, download_name=name)
+    abort(404)
+
+
 @app.get("/api/cover/<int:book_id>")
 def cover(book_id):
     lib = options()["library_path"]

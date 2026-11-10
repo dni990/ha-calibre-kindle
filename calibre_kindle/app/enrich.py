@@ -183,6 +183,14 @@ def series_from_text(title, comments):
     return None, None
 
 
+def clean_series(name):
+    """DNB liefert z. B. 'Die Magische Bibliothek-Reihe' -> 'Die Magische Bibliothek'."""
+    if not name:
+        return name
+    cleaned = re.sub(r"[\s-]*(?:Reihe|Serie|Saga|Trilogie|Series|Trilogy)\s*$", "", name.strip(), flags=re.I)
+    return cleaned.strip(" -–") or name.strip()
+
+
 def strip_series_from_title(title, series):
     if not series:
         return title

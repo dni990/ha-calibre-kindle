@@ -333,6 +333,7 @@ async function showBook(id) {
         <button class="btn" id="b-send">An Kindle senden</button>
         <button class="btn ghost" id="b-edit">Bearbeiten</button>
         <button class="btn ghost" id="b-enrich">Online ergänzen</button>
+        ${(b.formats || []).map(f => `<a class="btn ghost" style="text-decoration:none" href="api/book/${b.id}/file/${esc(f.toLowerCase())}" download>${esc(f)} herunterladen</a>`).join("")}
         <button class="btn danger" id="b-del">Löschen</button>
       </div>
       ${desc ? `<h2>Beschreibung</h2><div class="desc">${esc(desc)}</div>` : ""}

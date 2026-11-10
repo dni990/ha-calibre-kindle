@@ -267,19 +267,23 @@ def enrich_book(library, book_id, auto=False):
     if not current_langs and not lang and online.get("language"):
         changes["languages"] = online["language"]
 
-    if not b.get("series"):
-        series, index = online.get("series"), online.get("series_index")
+    series = b.get("series")
+    if series and enrich.clean_series(series) != series:
+        changes["series"] = series = enrich.clean_series(series)
+    if not series:
+        series, index = enrich.clean_series(online.get("series")), online.get("series_index")
         if not series:
             series, index = enrich.series_from_text(b.get("title"), comments)
         if series:
             changes["series"] = series
             changes["series_index"] = index or "1"
-            new_title = enrich.strip_series_from_title(b.get("title", ""), series)
-            m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
-            if m and m.group(1).strip() == series:
-                new_title = m.group(2).strip()
-            if new_title != b.get("title"):
-                changes["title"] = new_title
+    if series:
+        new_title = enrich.strip_series_from_title(b.get("title", ""), series)
+        m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
+        if m and m.group(1).strip() == series:
+            new_title = m.group(2).strip()
+        if new_title != b.get("title"):
+            changes["title"] = new_title
 
     if cover and not b.get("cover"):
         changes["cover"] = cover
