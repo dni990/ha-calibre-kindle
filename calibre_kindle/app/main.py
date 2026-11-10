@@ -292,15 +292,9 @@ def book_meta(book_id):
     return jsonify(ok=True)
 
 
-@app.post("/api/book/<int:book_id>/enrich")
-def book_enrich(book_id):
-    job = new_job("enrich", "Buch #%d" % book_id, book_id=book_id)
-    return jsonify(job=job)
-
-
 @app.post("/api/normalize")
 def normalize_all():
-    return jsonify(job=new_job("normalize_all", "Alle Bücher vereinheitlichen"))
+    return jsonify(job=new_job("normalize_all", "Alle Bücher online ergänzen"))
 
 
 @app.delete("/api/book/<int:book_id>")
@@ -409,7 +403,7 @@ if __name__ == "__main__":
     threading.Thread(target=worker, daemon=True).start()
     if rules_outdated() and os.path.exists(os.path.join(options()["library_path"], "metadata.db")):
         log.info("Metadaten-Regeln geändert – gleiche alle Bücher an")
-        new_job("normalize_all", "Alle Bücher vereinheitlichen")
+        new_job("normalize_all", "Alle Bücher online ergänzen")
     threading.Thread(target=refresh_adobe_status, daemon=True).start()
     log.info("Web-Oberfläche läuft auf Port 8099 (Ingress)")
     app.run(host="0.0.0.0", port=8099, threaded=True)
