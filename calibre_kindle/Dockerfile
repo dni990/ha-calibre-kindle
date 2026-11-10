@@ -26,5 +26,6 @@ RUN mkdir -p /opt/plugins /tmp/dl && cd /tmp/dl \
  && cd / && rm -rf /tmp/dl /tmp/patch_deacsm.py
 
 COPY app/ /app/
+COPY run.sh /run.sh
 
-CMD ["python3", "/app/main.py"]
+CMD ["sh", "/run.sh"]
