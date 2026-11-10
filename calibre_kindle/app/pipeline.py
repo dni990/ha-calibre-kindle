@@ -36,19 +36,30 @@ def run(cmd, timeout=600, env=None):
 
 # ---------------------------------------------------------------- Plugins
 
+PLUGIN_SOURCES = ("/opt/plugins", "/share/calibre/plugins")
+INSTALLED_NAMES = {"DeDRM_plugin.zip": "DeDRM.zip"}
+
+
 def ensure_plugins():
-    """DeDRM + DeACSM in die persistente Calibre-Konfiguration installieren."""
+    """Calibre-Plugins installieren: DeDRM, DeACSM, DNB_DE (im Image) und Zusätze aus /share/calibre/plugins."""
     os.makedirs(PLUGIN_DIR, exist_ok=True)
-    for zip_name, installed in (("DeDRM_plugin.zip", "DeDRM.zip"), ("DeACSM.zip", "DeACSM.zip")):
-        src = os.path.join("/opt/plugins", zip_name)
-        dst = os.path.join(PLUGIN_DIR, installed)
-        if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+    seen = set()
+    for folder in PLUGIN_SOURCES:
+        if not os.path.isdir(folder):
             continue
-        rc, out = run(["calibre-customize", "-a", src])
-        if rc != 0:
-            log.error("Plugin %s konnte nicht installiert werden:\n%s", zip_name, out)
-        else:
-            log.info("Plugin %s installiert", zip_name)
+        for zip_name in sorted(os.listdir(folder)):
+            if not zip_name.endswith(".zip") or zip_name in seen:
+                continue
+            seen.add(zip_name)
+            src = os.path.join(folder, zip_name)
+            dst = os.path.join(PLUGIN_DIR, INSTALLED_NAMES.get(zip_name, zip_name))
+            if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+                continue
+            rc, out = run(["calibre-customize", "-a", src])
+            if rc != 0:
+                log.error("Plugin %s konnte nicht installiert werden:\n%s", zip_name, out)
+            else:
+                log.info("Plugin %s installiert", zip_name)
 
 
 def adobe(action, version=""):

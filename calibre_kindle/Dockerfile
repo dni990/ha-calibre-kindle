@@ -3,6 +3,7 @@ FROM debian:bookworm-slim
 
 ARG DEDRM_VERSION=10.0.3
 ARG DEACSM_VERSION=0.0.16
+ARG DNB_VERSION=3.2.7
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -23,6 +24,9 @@ RUN mkdir -p /opt/plugins /tmp/dl && cd /tmp/dl \
  && unzip -q dedrm.zip DeDRM_plugin.zip && mv DeDRM_plugin.zip /opt/plugins/DeDRM_plugin.zip \
  && curl -fsSL -o /opt/plugins/DeACSM.zip "https://github.com/Leseratte10/acsm-calibre-plugin/releases/download/v${DEACSM_VERSION}/DeACSM_${DEACSM_VERSION}.zip" \
  && python3 /tmp/patch_deacsm.py /opt/plugins/DeACSM.zip \
+ && curl -fsSL "https://github.com/citronalco/calibre-dnb/archive/refs/tags/v${DNB_VERSION}.tar.gz" | tar xz \
+ && cd "calibre-dnb-${DNB_VERSION}" \
+ && zip -q /opt/plugins/DNB_DE.zip __init__.py config.py helper.py plugin-import-name-DNB_DE.txt LICENSE \
  && cd / && rm -rf /tmp/dl /tmp/patch_deacsm.py
 
 COPY app/ /app/
