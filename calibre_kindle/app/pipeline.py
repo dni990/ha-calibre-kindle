@@ -50,17 +50,26 @@ def ensure_plugins():
             log.info("Plugin %s installiert", zip_name)
 
 
-def adobe(action, mail="", password=""):
+def adobe(action, mail="", password="", version=""):
     rc, out = run(["calibre-debug", "-e", "/app/adobe_auth.py"], timeout=180,
-                  env={"ADOBE_ACTION": action, "ADOBE_MAIL": mail, "ADOBE_PASS": password})
+                  env={"ADOBE_ACTION": action, "ADOBE_MAIL": mail, "ADOBE_PASS": password,
+                       "ADOBE_VERSION": version})
+    data = None
     for line in reversed(out.splitlines()):
         if line.startswith("RESULT:"):
             data = json.loads(line[len("RESULT:"):])
-            if data.get("key"):
-                add_adept_key("DeACSM_" + (data.get("uuid") or "account").replace(":", "_"),
-                              data.pop("key"))
-            return data
-    return {"ok": False, "error": "Keine Antwort vom Adobe-Skript", "detail": out[-3000:]}
+            break
+    if data is None:
+        data = {"ok": False, "error": "Keine Antwort vom Adobe-Skript"}
+    if data.get("key"):
+        add_adept_key("DeACSM_" + (data.get("uuid") or "account").replace(":", "_"), data.pop("key"))
+    if not data.get("ok"):
+        # Ausgabe des Skripts (HTTP-Fehler von Adobe usw.) für die Fehlersuche
+        log_lines = [l for l in out.splitlines() if l.strip() and not l.startswith("RESULT:")]
+        data["log"] = "\n".join(log_lines[-30:])
+        log.error("Adobe-%s fehlgeschlagen: %s\n%s\n%s", action, data.get("error"),
+                  data["log"], data.get("detail", ""))
+    return data
 
 
 def load_dedrm_prefs():

@@ -81,6 +81,7 @@
       <div class="row">
         <input id="amail" type="email" placeholder="Adobe-ID (E-Mail)" autocomplete="off">
         <input id="apass" type="password" placeholder="Passwort" autocomplete="off">
+        <select id="aver"><option>ADE 2.0.1</option><option>ADE 3.0.1</option><option>ADE 4.5.11</option></select>
         <button id="aauth">Verknüpfen</button>
       </div>
       <pre id="aresult"></pre>
@@ -103,7 +104,7 @@ async function api(path, opts) {
   const r = await fetch(path, opts);
   let data = {};
   try { data = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) { const err = new Error(data.error || r.statusText); err.log = data.log; throw err; }
   return data;
 }
 
@@ -186,9 +187,9 @@ $("aauth").addEventListener("click", async () => {
   $("aauth").disabled = true; $("aresult").textContent = "Verbinde mit Adobe …";
   try {
     const r = await api("api/adobe/auth", { method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ mail: $("amail").value, password: $("apass").value }) });
+      body: JSON.stringify({ mail: $("amail").value, password: $("apass").value, version: $("aver").value }) });
     $("aresult").textContent = "Verknüpft: " + r.account; $("apass").value = "";
-  } catch (e) { $("aresult").textContent = "Fehler: " + e.message; }
+  } catch (e) { $("aresult").textContent = "Fehler: " + e.message + (e.log ? "\n\n" + e.log : ""); }
   $("aauth").disabled = false; refresh();
 });
 

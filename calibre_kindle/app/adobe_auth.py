@@ -25,7 +25,7 @@ try:
     sys.path.insert(0, os.path.join(config_dir, "plugins", "DeACSM.zip"))
 
     from libadobe import (createDeviceKeyFile, update_account_path,
-                          VAR_VER_BUILD_IDS, VAR_VER_DEFAULT_BUILD_ID)
+                          VAR_VER_BUILD_IDS, VAR_VER_DEFAULT_BUILD_ID, VAR_VER_SUPP_CONFIG_NAMES)
     from libadobeAccount import (createDeviceFile, getAuthMethodsAndCert, createUser,
                                  signIn, activateDevice, getAccountUUID,
                                  exportAccountEncryptionKeyBytes)
@@ -57,7 +57,12 @@ if action == "auth":
         result(ok=False, error="Es ist bereits ein Adobe-Konto verknüpft.")
     mail = os.environ.get("ADOBE_MAIL", "").strip()
     passwd = os.environ.get("ADOBE_PASS", "")
-    vers_idx = VAR_VER_BUILD_IDS.index(VAR_VER_DEFAULT_BUILD_ID)  # ADE 2.0.1
+    wanted = os.environ.get("ADOBE_VERSION", "")
+    if wanted in VAR_VER_SUPP_CONFIG_NAMES:
+        vers_idx = VAR_VER_SUPP_CONFIG_NAMES.index(wanted)
+    else:
+        vers_idx = VAR_VER_BUILD_IDS.index(VAR_VER_DEFAULT_BUILD_ID)  # ADE 2.0.1
+    print("Autorisiere als %s, Konto: %s" % (VAR_VER_SUPP_CONFIG_NAMES[vers_idx], mail or "anonym"))
     try:
         auth_cert = None
         if mail:
