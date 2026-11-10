@@ -238,7 +238,7 @@ const langList = (b) => Array.isArray(b.languages) ? b.languages : String(b.lang
 const langs = (b) => langList(b).map(l => LANGS[l] || l).join(", ");
 const tagList = (b) => Array.isArray(b.tags) ? b.tags : String(b.tags || "").split(",").map(x => x.trim()).filter(Boolean);
 function coverHtml(b, badge) {
-  const img = b.has_cover ? `<img loading="lazy" src="api/cover/${b.id}?v=${S.version}" alt="" onerror="this.remove()">` : "";
+  const img = b.has_cover ? `<img loading="lazy" src="api/cover/${b.id}?v=${b.cover_v}" alt="" onerror="this.remove()">` : "";
   const bd = badge ? `<span class="badge">${esc(badge)}</span>` : "";
   return `<div class="cover"><div class="ph">${esc(b.title)}</div>${img}${bd}</div>`;
 }

@@ -228,7 +228,13 @@ def state():
 
 def public_book(b):
     b = dict(b)
-    b["has_cover"] = bool(b.pop("cover", None))
+    cover = b.pop("cover", None)
+    b["has_cover"] = bool(cover)
+    try:
+        # Cache-Schlüssel je Cover-Datei: ändert sich, sobald das Bild ersetzt wird
+        b["cover_v"] = int(os.path.getmtime(cover)) if cover else 0
+    except OSError:
+        b["cover_v"] = 0
     b["isbn"] = pipeline.identifiers_dict(b.pop("identifiers", None)).get("isbn", "")
     b["formats"] = [os.path.splitext(f)[1].lstrip(".").upper() for f in b.get("formats") or []]
     return b
