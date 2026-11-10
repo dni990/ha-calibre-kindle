@@ -272,13 +272,14 @@ def public_book(b):
 def books():
     lib = options()["library_path"]
     return jsonify(version=pipeline.library_version(),
-                   books=[public_book(b) for b in pipeline.list_books(lib)])
+                   books=[{k: v for k, v in public_book(b).items() if k != "comments"}
+                          for b in pipeline.list_books(lib)])
 
 
 @app.get("/api/book/<int:book_id>")
 def book_detail(book_id):
     try:
-        return jsonify(public_book(pipeline.book_details(options()["library_path"], book_id)))
+        return jsonify(public_book(pipeline.cached_book(options()["library_path"], book_id)))
     except PipelineError as err:
         return jsonify(error=str(err)), 404
 
@@ -398,6 +399,9 @@ def cleanup_inbox():
 
 
 if __name__ == "__main__":
+    import signal
+    # Beim Stoppen durch HA sofort sauber beenden (sonst wartet der Supervisor bis zum Timeout)
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     cleanup_inbox()
     pipeline.ensure_plugins()
     threading.Thread(target=worker, daemon=True).start()

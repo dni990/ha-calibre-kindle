@@ -134,7 +134,7 @@ def calibredb(library, *args, timeout=600):
 
 
 LIST_FIELDS = ("id,title,authors,series,series_index,languages,pubdate,publisher,tags,"
-               "formats,timestamp,identifiers,cover,rating")
+               "formats,timestamp,identifiers,cover,rating,comments")
 _cache = {"version": 0, "books": None}
 
 
@@ -166,8 +166,16 @@ def list_books(library):
     return books
 
 
+def cached_book(library, book_id):
+    """Schnell für die Detailansicht: aus dem Cache statt eigenem calibredb-Aufruf."""
+    for b in list_books(library):
+        if b.get("id") == book_id:
+            return b
+    raise PipelineError("Buch %d nicht gefunden" % book_id)
+
+
 def book_details(library, book_id):
-    rc, out = calibredb(library, "list", "--for-machine", "--fields", LIST_FIELDS + ",comments",
+    rc, out = calibredb(library, "list", "--for-machine", "--fields", LIST_FIELDS,
                         "--search", "id:%d" % book_id)
     try:
         rows = json.loads(out[out.index("["):])
