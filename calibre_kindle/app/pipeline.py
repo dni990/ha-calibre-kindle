@@ -162,14 +162,36 @@ def book_details(library, book_id):
 
 
 EDITABLE = {"title", "authors", "series", "series_index", "languages", "publisher",
-            "pubdate", "tags", "comments"}
+            "pubdate", "tags", "comments", "isbn"}
 
 
-def set_metadata(library, book_id, fields):
+def identifiers_dict(value):
+    if isinstance(value, dict):
+        return dict(value)
+    result = {}
+    for part in str(value or "").split(","):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def set_metadata(library, book_id, fields, internal=False):
+    fields = dict(fields)
+    if "isbn" in fields:
+        current = identifiers_dict(book_details(library, book_id).get("identifiers"))
+        isbn = re.sub(r"[^0-9Xx]", "", str(fields.pop("isbn") or ""))
+        if isbn:
+            current["isbn"] = isbn
+        else:
+            current.pop("isbn", None)
+        fields["identifiers"] = ",".join("%s:%s" % kv for kv in current.items())
     args = []
     for key, value in fields.items():
-        if key not in EDITABLE:
+        if key not in EDITABLE and not (internal and key in ("identifiers", "cover")) and key != "identifiers":
             continue
+        if isinstance(value, (list, tuple)):
+            value = (" & " if key == "authors" else ", ").join(value)
         value = "" if value is None else str(value).strip()
         if key == "series_index" and not value:
             value = "1"
@@ -180,6 +202,84 @@ def set_metadata(library, book_id, fields):
     invalidate()
     if rc != 0:
         raise PipelineError("Metadaten konnten nicht gespeichert werden:\n" + tail(out))
+
+
+def enrich_book(library, book_id, auto=False):
+    """Metadaten verbessern. auto=True direkt nach dem Import (darf mehr überschreiben)."""
+    import enrich
+    b = book_details(library, book_id)
+    changes = {}
+    formats = b.get("formats") or []
+    epub = next((f for f in formats if f.lower().endswith(".epub")), None)
+    info = enrich.read_epub(epub) if epub else {"text": ""}
+
+    # Sprache: Text-Erkennung > EPUB-Angabe
+    lang = enrich.detect_language(info.get("text", "")) or info.get("language")
+    current_langs = b.get("languages") or []
+    if isinstance(current_langs, str):
+        current_langs = [current_langs]
+    if lang and (auto or not current_langs) and current_langs[:1] != [lang]:
+        changes["languages"] = lang
+
+    # Autoren 'Nachname, Vorname' -> 'Vorname Nachname'
+    authors = b.get("authors") or []
+    if isinstance(authors, str):
+        authors = [a.strip() for a in authors.split(" & ")]
+    flipped = [enrich.flip_author(a) for a in authors]
+    if flipped != authors:
+        changes["authors"] = flipped
+        authors = flipped
+
+    idents = identifiers_dict(b.get("identifiers"))
+    isbn = idents.get("isbn") or info.get("isbn")
+
+    online, cover = enrich.fetch_online(b.get("title"), authors, isbn)
+    if not isbn and online.get("isbn"):
+        isbn = online["isbn"]
+    if isbn and idents.get("isbn") != isbn:
+        idents["isbn"] = isbn
+        changes["identifiers"] = ",".join("%s:%s" % kv for kv in idents.items())
+
+    comments = b.get("comments") or online.get("comments")
+    if not b.get("comments") and online.get("comments"):
+        changes["comments"] = online["comments"]
+    if not b.get("publisher") and online.get("publisher"):
+        changes["publisher"] = online["publisher"]
+    if online.get("pubdate") and (auto or not b.get("pubdate") or str(b.get("pubdate")).startswith("0101")):
+        changes["pubdate"] = online["pubdate"]
+    if not current_langs and not lang and online.get("language"):
+        changes["languages"] = online["language"]
+
+    if not b.get("series"):
+        series, index = online.get("series"), online.get("series_index")
+        if not series:
+            series, index = enrich.series_from_text(b.get("title"), comments)
+        if series:
+            changes["series"] = series
+            changes["series_index"] = index or "1"
+            new_title = enrich.strip_series_from_title(b.get("title", ""), series)
+            m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
+            if m and m.group(1).strip() == series:
+                new_title = m.group(2).strip()
+            if new_title != b.get("title"):
+                changes["title"] = new_title
+
+    if cover and not b.get("cover"):
+        changes["cover"] = cover
+    if changes:
+        log.info("Metadaten für #%s ergänzt: %s", book_id, ", ".join(sorted(changes)))
+        set_metadata(library, book_id, changes, internal=True)
+        if epub:
+            calibredb(library, "embed_metadata", str(book_id))
+    if cover:
+        try:
+            os.remove(cover)
+        except OSError:
+            pass
+    labels = {"languages": "Sprache", "authors": "Autor", "identifiers": "ISBN", "comments": "Beschreibung",
+              "publisher": "Verlag", "pubdate": "Erscheinungsdatum", "series": "Reihe", "series_index": "Band",
+              "title": "Titel", "cover": "Cover"}
+    return [labels.get(k, k) for k in changes if k in labels]
 
 
 def remove_book(library, book_id):

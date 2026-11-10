@@ -257,7 +257,7 @@ async function loadBooks(force) {
 function filtered() {
   const q = $("q").value.trim().toLowerCase();
   if (!q) return S.books.slice();
-  return S.books.filter(b => [b.title, authors(b), b.series, tagList(b).join(" "), b.publisher].join(" ").toLowerCase().includes(q));
+  return S.books.filter(b => [b.title, authors(b), b.series, tagList(b).join(" "), b.publisher, b.isbn].join(" ").toLowerCase().includes(q));
 }
 
 function grouped(list) {
@@ -297,7 +297,7 @@ function renderLibrary() {
       }).join("") + "</div>";
     }
     return head + '<div class="list">' + books.map(b => {
-      const meta = [authors(b), year(b.pubdate), langs(b)].filter(Boolean).join(" · ");
+      const meta = [authors(b), year(b.pubdate), langs(b), b.isbn ? "ISBN " + b.isbn : ""].filter(Boolean).join(" · ");
       const ser = b.series ? `<div class="meta" style="color:var(--accent)">${esc(b.series)} · Band ${esc(idx(b.series_index))}</div>` : "";
       return `<div class="row-book" data-id="${b.id}">${coverHtml(b)}<div class="info"><div class="title">${esc(b.title)}</div>${ser}<div class="meta">${esc(meta)}</div></div></div>`;
     }).join("") + "</div>";
@@ -316,7 +316,7 @@ async function showBook(id) {
   try { b = await api("api/book/" + id); } catch (e) { $("book").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   const rows = [
     ["Autor*in", authors(b)], ["Jahr", year(b.pubdate)], ["Sprache", langs(b)], ["Verlag", b.publisher],
-    ["Schlagwörter", tagList(b).join(", ")], ["Formate", (b.formats || []).join(", ")],
+    ["ISBN", b.isbn], ["Schlagwörter", tagList(b).join(", ")], ["Formate", (b.formats || []).join(", ")],
     ["Hinzugefügt", b.timestamp ? new Date(b.timestamp).toLocaleDateString("de-DE") : ""],
   ].filter(r => r[1]);
   const desc = textFromHtml(b.comments);
@@ -332,6 +332,7 @@ async function showBook(id) {
       <div class="actions">
         <button class="btn" id="b-send">An Kindle senden</button>
         <button class="btn ghost" id="b-edit">Bearbeiten</button>
+        <button class="btn ghost" id="b-enrich">Online ergänzen</button>
         <button class="btn danger" id="b-del">Löschen</button>
       </div>
       ${desc ? `<h2>Beschreibung</h2><div class="desc">${esc(desc)}</div>` : ""}
@@ -344,6 +345,11 @@ async function showBook(id) {
     catch (e) { toast(e.message); $("b-send").disabled = false; }
   };
   $("b-edit").onclick = () => { S.editing = b; location.hash = "#/edit/" + b.id; };
+  $("b-enrich").onclick = async () => {
+    $("b-enrich").disabled = true;
+    try { await api(`api/book/${b.id}/enrich`, { method: "POST" }); toast("Suche Metadaten – dauert bis zu 1 Minute, siehe Protokoll"); refreshState(); }
+    catch (e) { toast(e.message); $("b-enrich").disabled = false; }
+  };
   $("b-del").onclick = async () => {
     if (!confirm(`„${b.title}“ wirklich aus der Bibliothek löschen?`)) return;
     try { await api("api/book/" + b.id, { method: "DELETE" }); toast("Gelöscht"); await loadBooks(true); location.hash = "#/"; }
@@ -370,6 +376,7 @@ async function showEdit(id) {
     <datalist id="series-list">${seriesNames.map(s => `<option value="${esc(s)}">`).join("")}</datalist>
     <label>Sprache<select name="languages"><option value="">–</option>${opts.map(([k, v]) => `<option value="${esc(k)}" ${k === lang ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
     <label>Erscheinungsdatum<input name="pubdate" type="date" value="${esc(pub)}"></label>
+    <label>ISBN<input name="isbn" inputmode="numeric" value="${esc(b.isbn || "")}"></label>
     <label>Verlag<input name="publisher" value="${esc(b.publisher || "")}"></label>
     <label>Schlagwörter (mit Komma trennen)<input name="tags" value="${esc(tagList(b).join(", "))}"></label>
     <label>Beschreibung<textarea name="comments">${esc(textFromHtml(b.comments))}</textarea></label>

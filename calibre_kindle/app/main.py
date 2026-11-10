@@ -123,13 +123,26 @@ def process(job):
                 os.remove(job["path"])
             except OSError:
                 pass
-        update(job, message="In Bibliothek gespeichert", book_id=info["id"], label=info["title"])
+        update(job, message="Ergänze Metadaten …", book_id=info["id"], label=info["title"])
+        try:
+            changed = pipeline.enrich_book(library, info["id"], auto=True)
+            info = pipeline.book(library, info["id"])
+            update(job, label=info["title"],
+                   message="Metadaten ergänzt: " + ", ".join(changed) if changed else "In Bibliothek gespeichert")
+        except Exception as err:  # noqa: BLE001 – Ergänzung ist optional
+            log.warning("Metadaten-Ergänzung fehlgeschlagen: %s", err)
         if job.get("send"):
             deliver(job, info)
             update(job, "fertig", "DRM entfernt, in Bibliothek und an Kindle gesendet")
             notify("Buch an Kindle gesendet", "„%s“ wurde an deinen Kindle geschickt." % info["title"])
         else:
             update(job, "fertig", "DRM entfernt und in Bibliothek gespeichert")
+    elif job["kind"] == "enrich":
+        update(job, "läuft", "Suche Metadaten (lokal + online) …")
+        changed = pipeline.enrich_book(library, job["book_id"])
+        info = pipeline.book(library, job["book_id"])
+        update(job, "fertig", ("Ergänzt: " + ", ".join(changed)) if changed else "Nichts Neues gefunden",
+               label=info["title"])
     elif job["kind"] == "resend":
         info = pipeline.book(library, job["book_id"])
         update(job, label=info["title"])
@@ -194,6 +207,7 @@ def state():
 def public_book(b):
     b = dict(b)
     b["has_cover"] = bool(b.pop("cover", None))
+    b["isbn"] = pipeline.identifiers_dict(b.pop("identifiers", None)).get("isbn", "")
     b["formats"] = [os.path.splitext(f)[1].lstrip(".").upper() for f in b.get("formats") or []]
     return b
 
@@ -220,6 +234,12 @@ def book_meta(book_id):
     except PipelineError as err:
         return jsonify(error=str(err)), 400
     return jsonify(ok=True)
+
+
+@app.post("/api/book/<int:book_id>/enrich")
+def book_enrich(book_id):
+    job = new_job("enrich", "Buch #%d" % book_id, book_id=book_id)
+    return jsonify(job=job)
 
 
 @app.delete("/api/book/<int:book_id>")
