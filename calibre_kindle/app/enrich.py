@@ -191,9 +191,72 @@ def clean_series(name):
     return cleaned.strip(" -–") or name.strip()
 
 
+ARTICLES = r"(?:die|der|das|the|la|le|il|el)\s+"
+
+
+def series_key(name):
+    """Vergleichsschlüssel ohne führenden Artikel/Zusatz: 'Die Magische Bibliothek-Reihe' -> 'magische bibliothek'."""
+    name = clean_series(name or "").strip().lower()
+    return re.sub(r"^" + ARTICLES, "", name).strip()
+
+
+def split_title_suffix(title):
+    """'Tinte und Knochen – Die Magische Bibliothek' -> ('Tinte und Knochen', 'Die Magische Bibliothek')."""
+    m = re.match(r"^(.+?)\s+[–—-]\s+(.+)$", title or "")
+    return (m.group(1).strip(), m.group(2).strip()) if m else (title, None)
+
+
 def strip_series_from_title(title, series):
-    if not series:
+    """Entfernt ' – Reihe' am Titelende, auch wenn der Artikel fehlt/abweicht."""
+    if not series or not title:
         return title
-    pattern = r"\s+[–—-]\s+%s(?:\s*\(?(?:%s)?\s*\d+\)?)?\s*$" % (re.escape(series), SERIES_WORDS)
-    new = re.sub(pattern, "", title, flags=re.I).strip()
-    return new or title
+    main, suffix = split_title_suffix(title)
+    if suffix:
+        suffix_plain = re.sub(r"\s*\(?(?:%s)?\s*\d+\)?\s*$" % SERIES_WORDS, "", suffix)
+        if series_key(suffix_plain) == series_key(series):
+            return main
+    return title
+
+
+# ---------------------------------------------------------------- Cover
+
+def image_info(path):
+    """(breite, höhe, farbig) aus JPEG/PNG-Header, ohne PIL. farbig=None wenn unbekannt."""
+    try:
+        with open(path, "rb") as f:
+            d = f.read(512 * 1024)
+    except OSError:
+        return 0, 0, None
+    if d[:8] == b"\x89PNG\r\n\x1a\n" and len(d) > 26:
+        w, h = int.from_bytes(d[16:20], "big"), int.from_bytes(d[20:24], "big")
+        return w, h, d[25] not in (0, 4)
+    if d[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(d):
+            if d[i] != 0xFF:
+                i += 1
+                continue
+            marker = d[i + 1]
+            if marker in (0xC0, 0xC1, 0xC2):
+                h, w = int.from_bytes(d[i + 5:i + 7], "big"), int.from_bytes(d[i + 7:i + 9], "big")
+                return w, h, d[i + 9] >= 3
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            i += 2 + int.from_bytes(d[i + 2:i + 4], "big")
+    return 0, 0, None
+
+
+def better_cover(current, candidate):
+    """Online-Cover übernehmen, wenn das vorhandene fehlt, schwarzweiß oder deutlich kleiner ist."""
+    if not candidate:
+        return False
+    cw, ch, ccolor = image_info(candidate)
+    if not cw or ccolor is False:
+        return False
+    if not current or not os.path.exists(current):
+        return True
+    w, h, color = image_info(current)
+    if color is False:
+        return True
+    return cw * ch > 1.5 * w * h and min(cw, ch) >= 500

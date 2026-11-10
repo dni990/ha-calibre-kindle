@@ -221,6 +221,12 @@ def set_metadata(library, book_id, fields, internal=False):
         raise PipelineError("Metadaten konnten nicht gespeichert werden:\n" + tail(out))
 
 
+def _authors_list(value):
+    if isinstance(value, str):
+        return [a.strip() for a in value.split(" & ") if a.strip()]
+    return list(value or [])
+
+
 def enrich_book(library, book_id, auto=False):
     """Metadaten verbessern. auto=True direkt nach dem Import (darf mehr überschreiben)."""
     import enrich
@@ -250,9 +256,22 @@ def enrich_book(library, book_id, auto=False):
     idents = identifiers_dict(b.get("identifiers"))
     isbn = idents.get("isbn") or info.get("isbn")
 
-    online, cover = enrich.fetch_online(b.get("title"), authors, isbn)
+    # Online-Suche mit dem Haupttitel (ohne ' – Reihenname'), sonst finden DNB & Co. oft nichts
+    main_title, title_suffix = enrich.split_title_suffix(b.get("title"))
+    online, cover = enrich.fetch_online(main_title, authors, isbn)
+    if not online and main_title != b.get("title"):
+        online, cover = enrich.fetch_online(b.get("title"), authors, isbn)
     if not isbn and online.get("isbn"):
         isbn = online["isbn"]
+        if not online.get("series"):
+            # mit der jetzt bekannten ISBN nochmal gezielt (liefert bei der DNB meist die Reihe)
+            again, again_cover = enrich.fetch_online(None, None, isbn)
+            if again.get("series"):
+                online["series"], online["series_index"] = again["series"], again.get("series_index")
+            if again_cover:
+                if cover:
+                    os.remove(cover)
+                cover = again_cover
     if isbn and idents.get("isbn") != isbn:
         idents["isbn"] = isbn
         changes["identifiers"] = ",".join("%s:%s" % kv for kv in idents.items())
@@ -274,9 +293,18 @@ def enrich_book(library, book_id, auto=False):
         series, index = enrich.clean_series(online.get("series")), online.get("series_index")
         if not series:
             series, index = enrich.series_from_text(b.get("title"), comments)
+        if not series and title_suffix:
+            # 'Titel – X' und X ist schon eine Reihe desselben Autors in der Bibliothek
+            for other in list_books(library):
+                if other.get("id") != book_id and other.get("series") and \
+                        enrich.series_key(other["series"]) == enrich.series_key(title_suffix) and \
+                        set(_authors_list(other.get("authors"))) & set(authors):
+                    series, index = other["series"], None
+                    break
         if series:
             changes["series"] = series
-            changes["series_index"] = index or "1"
+            if index:
+                changes["series_index"] = index
     if series:
         new_title = enrich.strip_series_from_title(b.get("title", ""), series)
         m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
@@ -285,7 +313,7 @@ def enrich_book(library, book_id, auto=False):
         if new_title != b.get("title"):
             changes["title"] = new_title
 
-    if cover and not b.get("cover"):
+    if cover and enrich.better_cover(b.get("cover"), cover):
         changes["cover"] = cover
     if changes:
         log.info("Metadaten für #%s ergänzt: %s", book_id, ", ".join(sorted(changes)))
