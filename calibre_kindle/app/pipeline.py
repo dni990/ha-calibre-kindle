@@ -6,6 +6,7 @@ import re
 import smtplib
 import ssl
 import subprocess
+import threading
 import zipfile
 from email.message import EmailMessage
 
@@ -112,8 +113,13 @@ def detect_ext(path):
 
 # ---------------------------------------------------------------- Bibliothek
 
+_db_lock = threading.RLock()
+
+
 def calibredb(library, *args, timeout=600):
-    return run(["calibredb", "--library-path", library, *args], timeout=timeout)
+    # calibredb darf nicht parallel auf derselben Bibliothek laufen
+    with _db_lock:
+        return run(["calibredb", "--library-path", library, *args], timeout=timeout)
 
 
 LIST_FIELDS = ("id,title,authors,series,series_index,languages,pubdate,publisher,tags,"
