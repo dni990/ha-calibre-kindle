@@ -1,5 +1,5 @@
 name: "Calibre → Kindle"
-version: "0.3.2"
+version: "0.4.0"
 slug: calibre_kindle
 description: "Calibre-Bibliothek mit Upload im HA-Panel: Adobe-DRM (ACSM/EPUB/PDF) entfernen und automatisch an den Kindle senden"
 url: "https://github.com/dni990/ha-calibre-kindle"
@@ -17,7 +17,10 @@ map:
   - type: share
     read_only: false
 options:
-  kindle_email: ""
+  kindles:
+    - name: "Kindle"
+      email: "name_XXXX@kindle.com"
+  default_kindle: "Kindle"
   library_path: "/share/calibre/library"
   default_sender: "gmail"
   senders:
@@ -31,6 +34,10 @@ options:
   auto_send: true
   notify: true
 schema:
+  kindles:
+    - name: str
+      email: email
+  default_kindle: "str?"
   kindle_email: "email?"
   library_path: str
   default_sender: str

@@ -5,14 +5,26 @@
 ### 1. Optionen
 | Option | Bedeutung |
 |---|---|
-| `kindle_email` | deine `…@kindle.com`-Adresse (Amazon → Inhalte und Geräte → Einstellungen → Persönliche Dokumente) |
+| `kindles` | Liste der Empfänger (`name` + `email`, die `…@kindle.com`-Adresse aus Amazon → Inhalte und Geräte → Einstellungen → Persönliche Dokumente) |
+| `default_kindle` | Name des Kindles, der beim Senden vorausgewählt ist |
 | `library_path` | Calibre-Bibliothek, Standard `/share/calibre/library` |
-| `default_sender` | Name des Absenders, der standardmäßig benutzt wird |
-| `senders` | Liste von SMTP-Absendern (im Panel auswählbar) |
+| `default_sender` | Name des Absenders, über den alle Mails verschickt werden |
+| `senders` | Liste von SMTP-Absendern (Zugangsdaten) |
 | `auto_send` | Haken „an Kindle senden“ standardmäßig gesetzt |
 | `notify` | HA-Benachrichtigung nach Versand/Fehler |
 
 Jeder Absender **muss** bei Amazon in der „Liste genehmigter E-Mail-Adressen“ stehen.
+
+Beispiel mit zwei Kindles:
+```yaml
+kindles:
+  - name: Paperwhite
+    email: name_abc123@kindle.com
+  - name: Kindle Kids
+    email: kind_xyz@kindle.com
+default_kindle: Paperwhite
+```
+Im Panel wählst du beim Hochladen bzw. „An Kindle senden“ den Empfänger aus.
 
 Beispiel mit zwei Absendern:
 ```yaml

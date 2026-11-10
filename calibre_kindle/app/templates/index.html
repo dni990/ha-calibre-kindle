@@ -150,7 +150,7 @@
     <div class="card">
       <h2>Kindle-Versand</h2>
       <div id="mailinfo" class="muted"></div>
-      <p class="muted">Ändern unter Einstellungen → Apps → Calibre → Kindle → Konfiguration.</p>
+      <p class="muted">Empfänger, Standard-Kindle und Absender werden unter Einstellungen → Apps → Calibre → Kindle → Konfiguration festgelegt.</p>
     </div>
     <div class="card">
       <h2>Adobe-DRM</h2>
@@ -196,7 +196,7 @@
       <div id="droptext"><b>Datei auswählen</b><br><span class="muted">.acsm · .epub · .pdf</span></div>
     </label>
     <label class="check"><input id="send" type="checkbox" checked> An Kindle senden</label>
-    <label>Absender <select id="sender"></select></label>
+    <label id="kindle-pick">An <select id="kindle"></select></label>
     <div class="actions" style="margin:0"><button id="sheet-close" class="btn ghost" type="button">Schließen</button></div>
   </div>
 </div>
@@ -331,6 +331,7 @@ async function showBook(id) {
       </div>
       <div class="actions">
         <button class="btn" id="b-send">An Kindle senden</button>
+        ${(S.state && S.state.kindles.length > 1) ? `<select id="b-kindle" class="sort" style="max-width:none">${kindleOptions()}</select>` : ""}
         <button class="btn ghost" id="b-edit">Bearbeiten</button>
         <button class="btn ghost" id="b-enrich">Online ergänzen</button>
         ${(b.formats || []).map(f => `<a class="btn ghost" style="text-decoration:none" href="api/book/${b.id}/file/${esc(f.toLowerCase())}" download>${esc(f)} herunterladen</a>`).join("")}
@@ -341,8 +342,8 @@ async function showBook(id) {
   $("b-send").onclick = async () => {
     $("b-send").disabled = true;
     try { await api("api/resend/" + b.id, { method: "POST", headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ sender: $("sender").value }) });
-          toast("Wird an den Kindle gesendet – siehe Protokoll"); refreshState(); }
+          body: JSON.stringify({ kindle: ($("b-kindle") || $("kindle")).value }) });
+          toast("Wird gesendet – siehe Protokoll"); refreshState(); }
     catch (e) { toast(e.message); $("b-send").disabled = false; }
   };
   $("b-edit").onclick = () => { S.editing = b; location.hash = "#/edit/" + b.id; };
@@ -394,6 +395,10 @@ async function showEdit(id) {
 }
 
 /* ---------- Protokoll / Einstellungen ---------- */
+function kindleOptions() {
+  const s = S.state; if (!s) return "";
+  return s.kindles.map(k => `<option value="${esc(k.name)}" ${k.name === s.default_kindle ? "selected" : ""}>${esc(k.name)}</option>`).join("");
+}
 function renderJobs(jobs) {
   $("jobs").innerHTML = jobs.length ? jobs.map(j => `
     <div class="job"><div class="grow"><div style="font-weight:500;overflow-wrap:anywhere">${esc(j.label)}</div>
@@ -404,8 +409,10 @@ function renderJobs(jobs) {
 }
 
 function renderSettings(s) {
-  $("mailinfo").innerHTML = (s.kindle_email ? `Kindle: <b>${esc(s.kindle_email)}</b>` : '<span class="status-bad">Kindle-Adresse fehlt</span>')
-    + "<br>Absender: " + (s.senders.map(x => esc(x.from) + (x.name === s.default_sender ? " (Standard)" : "")).join(", ") || "keiner");
+  $("mailinfo").innerHTML = (s.kindles.length
+      ? "Empfänger:<br>" + s.kindles.map(k => `• ${esc(k.name)}: <b>${esc(k.email)}</b>${k.name === s.default_kindle ? " (Standard)" : ""}`).join("<br>")
+      : '<span class="status-bad">Keine Kindle-Adresse eingetragen</span>')
+    + "<br><br>Absender: " + (s.sender ? esc(s.sender) : '<span class="status-bad">keiner</span>');
   const a = s.adobe;
   $("adobe").innerHTML = (!a.checked ? "Prüfe …" : a.authorized ? '<span class="status-ok">✔ Adobe autorisiert (anonym)</span>'
       : '<span class="status-bad">✖ Noch nicht autorisiert</span> – nötig für .acsm-Dateien.')
@@ -419,9 +426,12 @@ async function refreshState() {
   clearTimeout(refreshState.t);
   try {
     const s = await api("api/state"); S.state = s;
-    if (!senderInit) {
-      $("sender").innerHTML = s.senders.map(x => `<option value="${esc(x.name)}" ${x.name === s.default_sender ? "selected" : ""}>${esc(x.from)}</option>`).join("");
-      $("send").checked = s.auto_send; senderInit = true;
+    const kKey = JSON.stringify(s.kindles);
+    if (kKey !== senderInit) {
+      $("kindle").innerHTML = kindleOptions();
+      $("kindle-pick").style.display = s.kindles.length > 1 ? "" : "none";
+      if (senderInit === false) $("send").checked = s.auto_send;
+      senderInit = kKey;
     }
     renderJobs(s.jobs); renderSettings(s);
     const busy = s.jobs.some(j => j.state === "wartet" || j.state === "läuft");
@@ -457,7 +467,7 @@ async function uploadFiles(files) {
   const fd = new FormData();
   for (const f of files) fd.append("file", f);
   fd.append("send", $("send").checked ? "1" : "0");
-  fd.append("sender", $("sender").value);
+  fd.append("kindle", $("kindle").value);
   $("droptext").innerHTML = "<b>Lade hoch …</b>";
   try { await api("api/upload", { method: "POST", body: fd }); $("sheet").hidden = true;
         toast("Hochgeladen – Fortschritt im Protokoll"); location.hash = "#/log"; refreshState(); }

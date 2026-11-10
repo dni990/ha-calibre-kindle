@@ -35,16 +35,36 @@ def options():
         return json.load(f)
 
 
-def sender(name=None):
+def sender():
+    """Absender kommt ausschließlich aus der Add-on-Konfiguration (default_sender)."""
     opts = options()
     senders = opts.get("senders", [])
     if not senders:
         raise PipelineError("Kein Absender in den Add-on-Optionen konfiguriert.")
-    wanted = name or opts.get("default_sender")
     for s in senders:
-        if s["name"] == wanted:
+        if s["name"] == opts.get("default_sender"):
             return s
     return senders[0]
+
+
+def kindles():
+    """Liste der Empfänger. Älteres Feld kindle_email wird weiter unterstützt."""
+    opts = options()
+    result = [k for k in opts.get("kindles", []) if k.get("email") and "XXXX" not in k["email"]]
+    if not result and opts.get("kindle_email"):
+        result = [{"name": "Kindle", "email": opts["kindle_email"]}]
+    return result
+
+
+def kindle(name=None):
+    targets = kindles()
+    if not targets:
+        raise PipelineError("Keine Kindle-Adresse in den Add-on-Optionen eingetragen.")
+    wanted = name or options().get("default_kindle")
+    for k in targets:
+        if k["name"] == wanted:
+            return k
+    return targets[0]
 
 
 # ---------------------------------------------------------------- Jobs
@@ -104,11 +124,12 @@ def notify(title, message):
 
 
 def deliver(job, info):
-    opts = options()
-    snd = sender(job.get("sender"))
+    snd = sender()
+    target = kindle(job.get("kindle"))
     path = pipeline.pick_format(info.get("formats") or [])
-    update(job, "läuft", "Sende an Kindle über %s …" % snd["from_address"])
-    pipeline.send_to_kindle(snd, opts.get("kindle_email", ""), path, info.get("title", "Buch"))
+    update(job, "läuft", "Sende an %s (%s) …" % (target["name"], target["email"]))
+    pipeline.send_to_kindle(snd, target["email"], path, info.get("title", "Buch"))
+    return target
 
 
 def process(job):
@@ -132,9 +153,9 @@ def process(job):
         except Exception as err:  # noqa: BLE001 – Ergänzung ist optional
             log.warning("Metadaten-Ergänzung fehlgeschlagen: %s", err)
         if job.get("send"):
-            deliver(job, info)
-            update(job, "fertig", "DRM entfernt, in Bibliothek und an Kindle gesendet")
-            notify("Buch an Kindle gesendet", "„%s“ wurde an deinen Kindle geschickt." % info["title"])
+            target = deliver(job, info)
+            update(job, "fertig", "In Bibliothek gespeichert und an %s gesendet" % target["name"])
+            notify("Buch an Kindle gesendet", "„%s“ wurde an %s geschickt." % (info["title"], target["name"]))
         else:
             update(job, "fertig", "DRM entfernt und in Bibliothek gespeichert")
     elif job["kind"] == "enrich":
@@ -146,8 +167,8 @@ def process(job):
     elif job["kind"] == "resend":
         info = pipeline.book(library, job["book_id"])
         update(job, label=info["title"])
-        deliver(job, info)
-        update(job, "fertig", "An Kindle gesendet")
+        target = deliver(job, info)
+        update(job, "fertig", "An %s gesendet" % target["name"])
 
 
 def worker():
@@ -194,10 +215,11 @@ def state():
     return jsonify(
         jobs=job_list,
         library_version=pipeline.library_version(),
-        senders=[{"name": s["name"], "from": s["from_address"]} for s in opts.get("senders", [])],
-        default_sender=opts.get("default_sender"),
+        sender=next((s["from_address"] for s in opts.get("senders", []) if s["name"] == opts.get("default_sender")),
+                    (opts.get("senders") or [{}])[0].get("from_address", "")),
+        kindles=kindles(),
+        default_kindle=(kindle()["name"] if kindles() else None),
         auto_send=opts.get("auto_send", True),
-        kindle_email=opts.get("kindle_email", ""),
         library_path=opts["library_path"],
         adobe=adobe_status,
         adept_keys=pipeline.adept_key_names(),
@@ -286,7 +308,7 @@ def upload():
     if not files:
         return jsonify(error="Keine Datei"), 400
     send = request.form.get("send", "1") == "1"
-    snd = request.form.get("sender") or None
+    target = request.form.get("kindle") or None
     os.makedirs(INBOX, exist_ok=True)
     created = []
     for f in files:
@@ -306,14 +328,14 @@ def upload():
                 fixed = fixed[: -len(ext)]
             os.rename(path, fixed)
             path = fixed
-        created.append(new_job("upload", name, path=path, send=send, sender=snd))
+        created.append(new_job("upload", name, path=path, send=send, kindle=target))
     return jsonify(jobs=created)
 
 
 @app.post("/api/resend/<int:book_id>")
 def resend(book_id):
-    snd = (request.get_json(silent=True) or {}).get("sender")
-    job = new_job("resend", "Buch #%d" % book_id, book_id=book_id, sender=snd)
+    target = (request.get_json(silent=True) or {}).get("kindle")
+    job = new_job("resend", "Buch #%d" % book_id, book_id=book_id, kindle=target)
     return jsonify(job=job)
 
 
