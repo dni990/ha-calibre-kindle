@@ -174,8 +174,9 @@
     <div class="card">
       <h2>Bibliothek</h2>
       <div id="libinfo" class="muted"></div>
-      <p class="muted">Neue Bücher werden beim Hochladen automatisch online ergänzt und vereinheitlicht. Dieser Button macht dasselbe nachträglich für alle vorhandenen Bücher.</p>
-      <div class="actions"><button id="normall" class="btn">Alle Bücher online ergänzen</button></div>
+      <p class="muted">Neue Bücher werden beim Hochladen automatisch online ergänzt und vereinheitlicht. Hier kannst du das nachträglich für alle Bücher, eine Reihe oder ein einzelnes Buch wiederholen.</p>
+      <div class="form"><select id="normscope" aria-label="Was ergänzen"></select></div>
+      <div class="actions"><button id="normall" class="btn">Online ergänzen</button></div>
     </div>
   </section>
 </main>
@@ -415,6 +416,15 @@ function renderSettings(s) {
     + `<br>DeDRM-Schlüssel: ${s.adept_keys.length}`;
   $("adobe-setup").hidden = !a.checked || a.authorized;
   $("libinfo").textContent = `${S.books.length} Bücher · ${s.library_path}`;
+  const sel = $("normscope"), keep = sel.value;
+  const series = [...new Set(S.books.map(b => b.series).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de"));
+  const books = S.books.slice().sort((a, b) => a.title.localeCompare(b.title, "de"));
+  sel.innerHTML = `<option value="all">Alle Bücher (${S.books.length})</option>`
+    + (series.length ? `<optgroup label="Reihe">` + series.map(n =>
+        `<option value="s:${esc(n)}">${esc(n)} (${S.books.filter(b => b.series === n).length})</option>`).join("") + `</optgroup>` : "")
+    + `<optgroup label="Einzelnes Buch">` + books.map(b =>
+        `<option value="b:${b.id}">${esc(b.title)}</option>`).join("") + `</optgroup>`;
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
 }
 
 let senderInit = false;
@@ -446,7 +456,8 @@ $("aauth").onclick = async () => {
 };
 $("normall").onclick = async () => {
   $("normall").disabled = true;
-  try { await api("api/normalize", { method: "POST" }); location.hash = "#/log"; }
+  try { await api("api/normalize", { method: "POST", headers: {"Content-Type":"application/json"},
+                   body: JSON.stringify({ scope: $("normscope").value }) }); location.hash = "#/log"; }
   catch (e) { alert("Fehler: " + e.message); }
   $("normall").disabled = false; refreshState();
 };

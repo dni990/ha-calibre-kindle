@@ -1,5 +1,5 @@
 name: "Calibre → Kindle"
-version: "0.6.0"
+version: "0.6.1"
 slug: calibre_kindle
 description: "Calibre-Bibliothek mit Upload im HA-Panel: Adobe-DRM (ACSM/EPUB/PDF) entfernen und automatisch an den Kindle senden"
 url: "https://github.com/dni990/ha-calibre-kindle"

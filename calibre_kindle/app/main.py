@@ -166,6 +166,10 @@ def process(job):
                label=info["title"])
     elif job["kind"] == "normalize_all":
         books = pipeline.list_books(library)
+        if job.get("series"):
+            books = [b for b in books if b.get("series") == job["series"]]
+        elif job.get("book_id"):
+            books = [b for b in books if b.get("id") == job["book_id"]]
         # Vorlauf: gleichwertige Reihennamen aller Bücher sammeln, damit die Reihenfolge egal ist
         import enrich
         for n, b in enumerate(books, 1):
@@ -180,8 +184,9 @@ def process(job):
                 pipeline.enrich_book(library, b["id"], auto=True)
             except Exception as err:  # noqa: BLE001 – nächstes Buch trotzdem
                 log.warning("Angleichen von #%s fehlgeschlagen: %s", b["id"], err)
-        save_rules_version()
-        update(job, "fertig", "%d Bücher einheitlich gemacht" % len(books))
+        if not job.get("series") and not job.get("book_id"):
+            save_rules_version()
+        update(job, "fertig", "%d %s online ergänzt" % (len(books), "Buch" if len(books) == 1 else "Bücher"))
     elif job["kind"] == "resend":
         info = pipeline.book(library, job["book_id"])
         update(job, label=info["title"])
@@ -303,6 +308,15 @@ def book_meta(book_id):
 
 @app.post("/api/normalize")
 def normalize_all():
+    """scope: 'all' | 's:<Reihe>' | 'b:<Buch-ID>'"""
+    scope = (request.get_json(silent=True) or {}).get("scope") or "all"
+    if scope.startswith("s:"):
+        return jsonify(job=new_job("normalize_all", "Reihe „%s“ online ergänzen" % scope[2:], series=scope[2:]))
+    if scope.startswith("b:") and scope[2:].isdigit():
+        book_id = int(scope[2:])
+        title = next((b.get("title") for b in pipeline.list_books(options()["library_path"])
+                      if b.get("id") == book_id), "Buch #%d" % book_id)
+        return jsonify(job=new_job("normalize_all", "„%s“ online ergänzen" % title, book_id=book_id))
     return jsonify(job=new_job("normalize_all", "Alle Bücher online ergänzen"))
 
 
