@@ -168,8 +168,9 @@ def process(job):
         books = pipeline.list_books(library)
         if job.get("series"):
             books = [b for b in books if b.get("series") == job["series"]]
-        elif job.get("book_id"):
-            books = [b for b in books if b.get("id") == job["book_id"]]
+        elif job.get("book_ids") or job.get("book_id"):
+            wanted = set(job.get("book_ids") or [job["book_id"]])
+            books = [b for b in books if b.get("id") in wanted]
         # Vorlauf: gleichwertige Reihennamen aller Bücher sammeln, damit die Reihenfolge egal ist
         import enrich
         for n, b in enumerate(books, 1):
@@ -185,7 +186,7 @@ def process(job):
                 pipeline.enrich_book(library, b["id"], auto=True)
             except Exception as err:  # noqa: BLE001 – nächstes Buch trotzdem
                 log.warning("Angleichen von #%s fehlgeschlagen: %s", b["id"], err)
-        if not job.get("series") and not job.get("book_id"):
+        if not job.get("series") and not job.get("book_id") and not job.get("book_ids"):
             save_rules_version()
         update(job, "fertig", "%d %s online ergänzt" % (len(books), "Buch" if len(books) == 1 else "Bücher"))
     elif job["kind"] == "resend":
@@ -309,15 +310,19 @@ def book_meta(book_id):
 
 @app.post("/api/normalize")
 def normalize_all():
-    """scope: 'all' | 's:<Reihe>' | 'b:<Buch-ID>'"""
-    scope = (request.get_json(silent=True) or {}).get("scope") or "all"
+    """scope: 'all' | 's:<Reihe>' | 'books' mit book_ids: [..]"""
+    data = request.get_json(silent=True) or {}
+    scope = data.get("scope") or "all"
     if scope.startswith("s:"):
         return jsonify(job=new_job("normalize_all", "Reihe „%s“ online ergänzen" % scope[2:], series=scope[2:]))
-    if scope.startswith("b:") and scope[2:].isdigit():
-        book_id = int(scope[2:])
-        title = next((b.get("title") for b in pipeline.list_books(options()["library_path"])
-                      if b.get("id") == book_id), "Buch #%d" % book_id)
-        return jsonify(job=new_job("normalize_all", "„%s“ online ergänzen" % title, book_id=book_id))
+    if scope == "books":
+        ids = sorted({int(i) for i in data.get("book_ids") or [] if str(i).isdigit()})
+        if not ids:
+            return jsonify(error="Keine Bücher ausgewählt"), 400
+        titles = [b.get("title") for b in pipeline.list_books(options()["library_path"]) if b.get("id") in ids]
+        label = ("„%s“ online ergänzen" % titles[0]) if len(ids) == 1 and titles else \
+            "%d Bücher online ergänzen" % len(ids)
+        return jsonify(job=new_job("normalize_all", label, book_ids=ids))
     return jsonify(job=new_job("normalize_all", "Alle Bücher online ergänzen"))
 
 
