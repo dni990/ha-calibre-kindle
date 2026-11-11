@@ -235,6 +235,16 @@ def _authors_list(value):
     return list(value or [])
 
 
+def canonical_series(library, book_id, series):
+    """Einheitlicher Reihenname: gleichwertige Namen (Aliase) -> der in der Bibliothek häufigste."""
+    import enrich
+    from collections import Counter
+    keys = enrich.alias_keys(series)
+    used = Counter(o["series"] for o in list_books(library)
+                   if o.get("id") != book_id and o.get("series") and enrich.series_key(o["series"]) in keys)
+    return used.most_common(1)[0][0] if used else series
+
+
 def enrich_book(library, book_id, auto=False):
     """Metadaten verbessern. auto=True direkt nach dem Import (darf mehr überschreiben)."""
     import enrich
@@ -265,21 +275,24 @@ def enrich_book(library, book_id, auto=False):
     isbn = idents.get("isbn") or info.get("isbn")
 
     # Online-Suche mit dem Haupttitel (ohne ' – Reihenname'), sonst finden DNB & Co. oft nichts
+    # Titel bereinigen (z. B. DNB-Sortierzeichen '¬Die¬ …' -> 'Die …')
+    orig_title = b.get("title") or ""
+    b["title"] = enrich.clean_text(orig_title)
     main_title, title_suffix = enrich.split_title_suffix(b.get("title"))
     online, cover = enrich.fetch_online(main_title, authors, isbn)
     if not online and main_title != b.get("title"):
         online, cover = enrich.fetch_online(b.get("title"), authors, isbn)
     if not isbn and online.get("isbn"):
         isbn = online["isbn"]
-        if not online.get("series"):
-            # mit der jetzt bekannten ISBN nochmal gezielt (liefert bei der DNB meist die Reihe)
-            again, again_cover = enrich.fetch_online(None, None, isbn)
-            if again.get("series"):
-                online["series"], online["series_index"] = again["series"], again.get("series_index")
-            if again_cover:
-                if cover:
-                    os.remove(cover)
-                cover = again_cover
+    if isbn and not online.get("series") and not b.get("series"):
+        # nur mit der ISBN nochmal gezielt suchen (liefert bei der DNB oft die Reihe)
+        again, again_cover = enrich.fetch_online(None, None, isbn)
+        if again.get("series"):
+            online["series"], online["series_index"] = again["series"], again.get("series_index")
+        if again_cover:
+            if cover:
+                os.remove(cover)
+            cover = again_cover
     # Kennungen: nur ISBN behalten (mobi-asin u. Ä. aus Onleihe-Dateien sind Fantasiewerte)
     wanted = {k: v for k, v in idents.items() if k in enrich.KEEP_IDENTIFIERS}
     if isbn:
@@ -305,11 +318,19 @@ def enrich_book(library, book_id, auto=False):
     if not current_langs and not lang and online.get("language"):
         changes["languages"] = online["language"]
 
+    # Reihe: alle DNB-Ausgaben dieses Titels ansehen (Reihe steht oft nur beim Druck, Namen variieren)
+    editions = enrich.dnb_editions(main_title, authors[0] if authors else None)
+    enrich.remember_aliases([n for _, n, _ in editions] +
+                            [enrich.clean_series(enrich.clean_text(online.get("series")))])
+
     series = b.get("series")
-    if series and enrich.clean_series(series) != series:
-        changes["series"] = series = enrich.clean_series(series)
+    index = None
+    if series and enrich.clean_series(enrich.clean_text(series)) != series:
+        series = enrich.clean_series(enrich.clean_text(series))
     if not series:
-        series, index = enrich.clean_series(online.get("series")), online.get("series_index")
+        series, index = enrich.clean_series(enrich.clean_text(online.get("series"))), online.get("series_index")
+        if not series:
+            series, index = enrich.series_from_editions(editions)
         if not series:
             series, index = enrich.series_from_text(b.get("title"), comments)
         if not series and title_suffix:
@@ -320,7 +341,9 @@ def enrich_book(library, book_id, auto=False):
                         set(_authors_list(other.get("authors"))) & set(authors):
                     series, index = other["series"], None
                     break
-        if series:
+    if series:
+        series = canonical_series(library, book_id, series)
+        if series != b.get("series"):
             changes["series"] = series
             if index:
                 changes["series_index"] = index
@@ -329,9 +352,11 @@ def enrich_book(library, book_id, auto=False):
         m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
         if m and m.group(1).strip() == series:
             new_title = m.group(2).strip()
-        if new_title != b.get("title"):
+        if new_title != orig_title:
             changes["title"] = new_title
 
+    if "title" not in changes and b["title"] != orig_title:
+        changes["title"] = b["title"]
     if cover and enrich.better_cover(b.get("cover"), cover):
         changes["cover"] = cover
     if changes:

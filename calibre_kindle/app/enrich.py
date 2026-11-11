@@ -186,11 +186,22 @@ def series_from_text(title, comments):
     return None, None
 
 
+def clean_text(value):
+    """Entfernt Sortier-/Steuerzeichen aus Bibliothekskatalogen: '¬Die¬ Stimmen' -> 'Die Stimmen'."""
+    if not value:
+        return value
+    import unicodedata
+    value = unicodedata.normalize("NFC", value)
+    value = value.replace("\u00ac", "").replace("\u0098", "").replace("\u009c", "")
+    return re.sub(r"\s{2,}", " ", value).strip()
+
+
 def clean_series(name):
     """DNB liefert z. B. 'Die Magische Bibliothek-Reihe' -> 'Die Magische Bibliothek'."""
     if not name:
         return name
-    cleaned = re.sub(r"[\s-]*(?:Reihe|Serie|Saga|Trilogie|Series|Trilogy)\s*$", "", name.strip(), flags=re.I)
+    # nur abgetrennte Zusätze: 'X-Reihe', 'X Saga' (nicht 'Dämonensaga')
+    cleaned = re.sub(r"(?:\s+|\s*-\s*)(?:Reihe|Serie|Saga|Trilogie|Series|Trilogy)\s*$", "", name.strip(), flags=re.I)
     return cleaned.strip(" -–") or name.strip()
 
 
@@ -199,7 +210,8 @@ ARTICLES = r"(?:die|der|das|the|la|le|il|el)\s+"
 
 def series_key(name):
     """Vergleichsschlüssel ohne führenden Artikel/Zusatz: 'Die Magische Bibliothek-Reihe' -> 'magische bibliothek'."""
-    name = clean_series(name or "").strip().lower()
+    name = clean_series(clean_text(name) or "").strip().lower()
+    name = re.sub(r"[\s\-–—_:]+", " ", name)
     return re.sub(r"^" + ARTICLES, "", name).strip()
 
 
@@ -268,7 +280,7 @@ def better_cover(current, candidate):
 # ---------------------------------------------------------------- Einheitliche Regeln
 # Werden bei jedem Import und bei „Online ergänzen“ angewendet und in die EPUB geschrieben.
 # RULES_VERSION erhöhen, wenn sich Regeln ändern -> beim nächsten Start werden alle Bücher neu angeglichen.
-RULES_VERSION = 1
+RULES_VERSION = 4
 
 LEGAL_FORMS = r"(?:GmbH\s*&\s*Co\.?\s*KG|GmbH|mbH|KG|AG|e\.\s?K\.|Ltd\.?|Limited|Inc\.?|LLC|S\.?p\.?A\.?|S\.?r\.?l\.?)"
 # Konzern-/Gruppennamen: hier steht nicht der eigentliche Verlag (Imprint)
@@ -323,3 +335,107 @@ def normalize_pubdate(online_date, epub_date, current):
     """Nur das Erscheinungsjahr (Online > EPUB > vorhanden), einheitlich als 1. Januar."""
     year = year_of(online_date) or year_of(epub_date) or year_of(current)
     return "%d-01-01T12:00:00+00:00" % year if year else None
+
+
+# ---------------------------------------------------------------- DNB: alle Ausgaben eines Titels
+# Reihen stehen bei der DNB oft nur bei einer Ausgabe (z. B. Druck), und dieselbe Reihe kann je
+# Ausgabe anders heißen ("Die Dämonensaga" / "Demon Zyklus"). Namen, die beim selben Werk vorkommen,
+# werden als gleichwertig gespeichert (series_aliases.json) und auf einen Namen vereinheitlicht.
+ALIAS_FILE = "/data/series_aliases.json"
+DNB_SRU = "https://services.dnb.de/sru/dnb"
+
+
+def dnb_editions(title, author, timeout=20):
+    """[(isbn, reihe, band)] aller DNB-Ausgaben mit diesem Titel und Autor-Nachnamen."""
+    import urllib.parse
+    import urllib.request
+    if not title or not author:
+        return []
+    surname = author.split()[-1]
+    query = 'tit="%s" and per=%s' % (title.replace('"', ""), surname)
+    url = DNB_SRU + "?" + urllib.parse.urlencode({
+        "version": "1.1", "operation": "searchRetrieve", "query": query,
+        "recordSchema": "MARC21-xml", "maximumRecords": "30"})
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            xml = resp.read().decode("utf-8", "replace")
+    except Exception as err:  # noqa: BLE001
+        log.info("DNB-Abfrage fehlgeschlagen: %s", err)
+        return []
+    # Nicht-Sortier-Markierungen der DNB (&#152;Das&#156;) entfernen, bevor HTML-Entities aufgelöst werden
+    xml = xml.replace("&#152;", "").replace("&#156;", "")
+    want = clean_text(title).lower()
+    result = []
+    for rec in xml.split("<record ")[1:]:
+        m = re.search(r'tag="245".*?code="a">([^<]+)', rec, re.S)
+        rec_title = clean_text(html.unescape(m.group(1))).strip(" /:") if m else ""
+        isbn = re.search(r'tag="020".*?code="a">([^<]+)', rec, re.S)
+        isbn = clean_isbn(isbn.group(1)) if isbn else None
+        if rec_title.lower() != want:
+            # z. B. 'Das Lied der Dunkelheit (Demon Zyklus 1)'
+            pm = re.match(r"^(.+?)\s*\((.+?),?\s+(?:%s\s*)?(\d+(?:[.,]\d+)?)\)$" % SERIES_WORDS, rec_title)
+            if pm and pm.group(1).lower() == want:
+                result.append((isbn, clean_series(pm.group(2).strip()), pm.group(3).replace(",", ".")))
+            continue
+        for field in re.findall(r'tag="(?:490|830)"[^>]*>(.*?)</datafield>', rec, re.S):
+            a = re.search(r'code="a">([^<]+)', field)
+            v = re.search(r'code="v">([^<]+)', field)
+            if not a:
+                continue
+            name, _, rest = html.unescape(a.group(1)).partition(";")
+            name = clean_series(clean_text(name.strip(" []")))
+            num = re.search(r"\d+(?:[.,]\d+)?", (v.group(1) if v else rest) or "")
+            if name:
+                result.append((isbn, name, num.group(0).replace(",", ".") if num else None))
+    return result
+
+
+def load_aliases():
+    import json
+    try:
+        with open(ALIAS_FILE) as f:
+            return [set(g) for g in json.load(f)]
+    except (OSError, ValueError):
+        return []
+
+
+def remember_aliases(names):
+    """Namen, die beim selben Werk vorkommen, zu einer Gruppe zusammenführen."""
+    import json
+    keys = {series_key(n): n for n in names if n}
+    if len(keys) < 2:
+        return
+    groups = load_aliases()
+    merged = set(keys.values())
+    rest = []
+    for g in groups:
+        if {series_key(n) for n in g} & set(keys):
+            merged |= g
+        else:
+            rest.append(g)
+    rest.append(merged)
+    try:
+        with open(ALIAS_FILE, "w") as f:
+            json.dump([sorted(g) for g in rest], f, ensure_ascii=False, indent=1)
+    except OSError as err:
+        log.warning("Reihen-Aliase nicht gespeichert: %s", err)
+
+
+def alias_keys(name):
+    key = series_key(name)
+    for g in load_aliases():
+        keys = {series_key(n) for n in g}
+        if key in keys:
+            return keys
+    return {key}
+
+
+def series_from_editions(editions):
+    """Häufigste Reihe/Band über alle Ausgaben."""
+    from collections import Counter
+    counts = Counter((series_key(n), idx) for _, n, idx in editions if idx)
+    if not counts:
+        return None, None
+    (key, idx), _ = counts.most_common(1)[0]
+    name = next(n for _, n, i in editions if series_key(n) == key)
+    return name, idx

@@ -166,6 +166,14 @@ def process(job):
                label=info["title"])
     elif job["kind"] == "normalize_all":
         books = pipeline.list_books(library)
+        # Vorlauf: gleichwertige Reihennamen aller Bücher sammeln, damit die Reihenfolge egal ist
+        import enrich
+        for n, b in enumerate(books, 1):
+            update(job, "läuft", "Reihen prüfen %d/%d" % (n, len(books)))
+            authors = pipeline._authors_list(b.get("authors"))
+            title = enrich.split_title_suffix(enrich.clean_text(b.get("title") or ""))[0]
+            eds = enrich.dnb_editions(title, authors[0] if authors else None)
+            enrich.remember_aliases([x[1] for x in eds] + [b.get("series")])
         for n, b in enumerate(books, 1):
             update(job, "läuft", "Buch %d von %d: %s" % (n, len(books), b.get("title")))
             try:
@@ -247,7 +255,7 @@ def state():
                     (opts.get("senders") or [{}])[0].get("from_address", "")),
         kindles=kindles(),
         default_kindle=(kindle()["name"] if kindles() else None),
-        auto_send=opts.get("auto_send", True),
+        auto_send=opts.get("auto_send", False),
         library_path=opts["library_path"],
         adobe=adobe_status,
         adept_keys=pipeline.adept_key_names(),
