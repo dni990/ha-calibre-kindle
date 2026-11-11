@@ -175,9 +175,10 @@ def process(job):
         for n, b in enumerate(books, 1):
             update(job, "läuft", "Reihen prüfen %d/%d" % (n, len(books)))
             authors = pipeline._authors_list(b.get("authors"))
-            title = enrich.split_title_suffix(enrich.clean_text(b.get("title") or ""))[0]
+            title = enrich.series_title_hint(enrich.clean_text(b.get("title") or ""))[0]
+            title = enrich.split_title_suffix(title)[0]
             eds = enrich.dnb_editions(title, authors[0] if authors else None)
-            enrich.remember_aliases([x[1] for x in eds] + [b.get("series")])
+            enrich.remember_aliases([x[1] for x in eds])
         for n, b in enumerate(books, 1):
             update(job, "läuft", "Buch %d von %d: %s" % (n, len(books), b.get("title")))
             try:

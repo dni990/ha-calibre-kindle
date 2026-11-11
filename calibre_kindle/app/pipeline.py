@@ -245,8 +245,43 @@ def canonical_series(library, book_id, series):
     return used.most_common(1)[0][0] if used else series
 
 
+REVIEW_TAG = "Bitte prüfen"
+
+
+def _find_isbn(enrich, candidates, search_title, authors):
+    """ISBN + DNB-Datensatz bestimmen. Reihenfolge: gespeicherte/Datei-ISBN, die die DNB kennt ->
+    einmalige Titelsuche, deren Treffer per Titelvergleich bestätigt sein muss."""
+    for cand in candidates:
+        record = enrich.dnb_record(cand)
+        if record and (not search_title or not record.get("title")
+                       or enrich.same_title(record["title"], search_title)):
+            return cand, record
+        if record:
+            log.info("ISBN %s gehört laut DNB zu „%s“, nicht zu „%s“", cand, record["title"], search_title)
+    # Datei-ISBN, die die DNB nicht kennt (z. B. ausländische Ausgabe): Online-Titel muss passen
+    for cand in candidates:
+        if enrich.dnb_record(cand) is None:
+            data, cover = enrich.fetch_online(search_title, authors, cand)
+            if cover:
+                os.remove(cover)
+            if data and enrich.same_title(data.get("title"), search_title):
+                return cand, None
+    # keine brauchbare ISBN: einmal nach Titel + Autor suchen
+    if search_title:
+        data, cover = enrich.fetch_online(search_title, authors, None)
+        if cover:
+            os.remove(cover)
+        isbn = data.get("isbn")
+        if isbn and enrich.same_title(data.get("title"), search_title):
+            record = enrich.dnb_record(isbn)
+            if record is None or enrich.same_title(record.get("title"), search_title):
+                return isbn, record
+    return None, None
+
+
 def enrich_book(library, book_id, auto=False):
-    """Metadaten verbessern. auto=True direkt nach dem Import (darf mehr überschreiben)."""
+    """Metadaten nach dem Schema: ISBN -> DNB-Datensatz (Hauptquelle) -> Lücken per ISBN online
+    -> sonst Markierung 'Bitte prüfen'. Danach einheitliche Schreibweisen und Einbetten in die EPUB."""
     import enrich
     b = book_details(library, book_id)
     changes = {}
@@ -254,111 +289,117 @@ def enrich_book(library, book_id, auto=False):
     epub = next((f for f in formats if f.lower().endswith(".epub")), None)
     info = enrich.read_epub(epub) if epub else {"text": ""}
 
-    # Sprache: Text-Erkennung > EPUB-Angabe
-    lang = enrich.detect_language(info.get("text", "")) or info.get("language")
-    current_langs = b.get("languages") or []
-    if isinstance(current_langs, str):
-        current_langs = [current_langs]
-    if lang and (auto or not current_langs) and current_langs[:1] != [lang]:
-        changes["languages"] = lang
+    cur_title = b.get("title") or ""
+    cur_authors = _authors_list(b.get("authors"))
+    file_authors = [enrich.flip_author(a) for a in cur_authors]
+    hint_title, hint_series, hint_index = enrich.series_title_hint(enrich.clean_text(cur_title))
+    search_title, title_suffix = enrich.split_title_suffix(hint_title)
 
-    # Autoren 'Nachname, Vorname' -> 'Vorname Nachname'
-    authors = b.get("authors") or []
-    if isinstance(authors, str):
-        authors = [a.strip() for a in authors.split(" & ")]
-    flipped = [enrich.flip_author(a) for a in authors]
-    if flipped != authors:
-        changes["authors"] = flipped
-        authors = flipped
-
+    # 1. ISBN
     idents = identifiers_dict(b.get("identifiers"))
-    isbn = idents.get("isbn") or info.get("isbn")
+    candidates = []
+    for c in (idents.get("isbn"), info.get("isbn")):
+        c = enrich.clean_isbn(c or "")
+        if c and c not in candidates:
+            candidates.append(c)
+    isbn, record = _find_isbn(enrich, candidates, search_title, file_authors)
+    record = record or {}
 
-    # Online-Suche mit dem Haupttitel (ohne ' – Reihenname'), sonst finden DNB & Co. oft nichts
-    # Titel bereinigen (z. B. DNB-Sortierzeichen '¬Die¬ …' -> 'Die …')
-    orig_title = b.get("title") or ""
-    b["title"] = enrich.clean_text(orig_title)
-    main_title, title_suffix = enrich.split_title_suffix(b.get("title"))
-    online, cover = enrich.fetch_online(main_title, authors, isbn)
-    if not online and main_title != b.get("title"):
-        online, cover = enrich.fetch_online(b.get("title"), authors, isbn)
-    if not isbn and online.get("isbn"):
-        isbn = online["isbn"]
-    if isbn and not online.get("series") and not b.get("series"):
-        # nur mit der ISBN nochmal gezielt suchen (liefert bei der DNB oft die Reihe)
-        again, again_cover = enrich.fetch_online(None, None, isbn)
-        if again.get("series"):
-            online["series"], online["series_index"] = again["series"], again.get("series_index")
-        if again_cover:
+    # 2. Lücken füllen – zuerst direkt per ISBN (DNB-Cover, Google-Books-Beschreibung),
+    #    die langsamere Calibre-Online-Suche nur, wenn danach noch etwas fehlt
+    cover = enrich.dnb_cover(isbn) if isbn else None
+    comments = b.get("comments") or (enrich.google_description(isbn) if isbn else None)
+    online = {}
+    if isbn and (not record or not comments or not (cover or b.get("cover"))):
+        online, online_cover = enrich.fetch_online(record.get("title") or search_title,
+                                                   record.get("authors") or file_authors, isbn)
+        if online_cover and (not cover or enrich.better_cover(cover, online_cover)):
             if cover:
                 os.remove(cover)
-            cover = again_cover
-    # Kennungen: nur ISBN behalten (mobi-asin u. Ä. aus Onleihe-Dateien sind Fantasiewerte)
-    wanted = {k: v for k, v in idents.items() if k in enrich.KEEP_IDENTIFIERS}
-    if isbn:
-        wanted["isbn"] = isbn
-    if wanted != idents and wanted:
-        changes["identifiers"] = ",".join("%s:%s" % kv for kv in sorted(wanted.items()))
+            cover = online_cover
+        elif online_cover:
+            os.remove(online_cover)
+        comments = comments or online.get("comments")
+    found = bool(record or online)
 
-    comments = b.get("comments") or online.get("comments")
-    if not b.get("comments") and online.get("comments"):
-        changes["comments"] = online["comments"]
+    title = record.get("title") or (online.get("title") if online else None) or hint_title
+    authors = record.get("authors") or [enrich.flip_author(a) for a in online.get("authors", [])] or file_authors
+    language = record.get("language") or enrich.detect_language(info.get("text", "")) \
+        or info.get("language") or online.get("language")
+    year = record.get("year") or enrich.year_of(online.get("pubdate")) or enrich.year_of(info.get("date")) \
+        or enrich.year_of(b.get("pubdate"))
 
-    # Verlag: Imprint statt Konzern, einheitliche Schreibweise
-    known = {x.get("publisher") for x in list_books(library) if x.get("publisher") and x.get("id") != book_id}
-    publisher = enrich.choose_publisher(online.get("publisher"), info.get("publisher"), info.get("rights"),
-                                        b.get("publisher"), known)
-    if publisher and publisher != b.get("publisher"):
-        changes["publisher"] = publisher
-
-    # Erscheinungsdatum: nur Jahr
-    pubdate = enrich.normalize_pubdate(online.get("pubdate"), info.get("date"), b.get("pubdate"))
-    if pubdate and not str(b.get("pubdate") or "").startswith(pubdate[:10] + "T12:00"):
-        changes["pubdate"] = pubdate
-    if not current_langs and not lang and online.get("language"):
-        changes["languages"] = online["language"]
-
-    # Reihe: alle DNB-Ausgaben dieses Titels ansehen (Reihe steht oft nur beim Druck, Namen variieren)
-    editions = enrich.dnb_editions(main_title, authors[0] if authors else None)
-    enrich.remember_aliases([n for _, n, _ in editions] +
-                            [enrich.clean_series(enrich.clean_text(online.get("series")))])
-
-    series = b.get("series")
-    index = None
-    if series and enrich.clean_series(enrich.clean_text(series)) != series:
-        series = enrich.clean_series(enrich.clean_text(series))
+    # 3. Reihe: DNB-Datensatz > andere DNB-Ausgaben desselben Titels > online > Hinweise im Titel
+    editions = enrich.dnb_editions(enrich.split_title_suffix(enrich.clean_text(title))[0],
+                                   authors[0] if authors else None)
+    online_series = enrich.clean_series(enrich.clean_text(online.get("series")))
+    enrich.remember_aliases([n for _, n, _ in editions] + [record.get("series"), online_series])
+    series, index = record.get("series"), record.get("series_index")
     if not series:
-        series, index = enrich.clean_series(enrich.clean_text(online.get("series"))), online.get("series_index")
-        if not series:
-            series, index = enrich.series_from_editions(editions)
-        if not series:
-            series, index = enrich.series_from_text(b.get("title"), comments)
-        if not series and title_suffix:
-            # 'Titel – X' und X ist schon eine Reihe desselben Autors in der Bibliothek
-            for other in list_books(library):
-                if other.get("id") != book_id and other.get("series") and \
-                        enrich.series_key(other["series"]) == enrich.series_key(title_suffix) and \
-                        set(_authors_list(other.get("authors"))) & set(authors):
-                    series, index = other["series"], None
-                    break
+        series, index = enrich.series_from_editions(editions)
+    if not series and online_series:
+        series, index = online_series, online.get("series_index")
+    if not series and hint_series:
+        series, index = hint_series, hint_index
+    if not series and title_suffix:
+        for other in list_books(library):
+            if other.get("id") != book_id and other.get("series") and \
+                    enrich.series_key(other["series"]) == enrich.series_key(title_suffix):
+                series, index = other["series"], None
+                break
+    if not series and b.get("series"):
+        series, index = enrich.clean_series(enrich.clean_text(b["series"])), None
+
+    # 4. Einheitliche Schreibweisen
+    title = enrich.clean_text(title)
     if series:
         series = canonical_series(library, book_id, series)
-        if series != b.get("series"):
-            changes["series"] = series
-            if index:
-                changes["series_index"] = index
-    if series:
-        new_title = enrich.strip_series_from_title(b.get("title", ""), series)
-        m = re.match(r"^(.+?)\s+\d+(?:[.,]\d+)?\s*[:–—-]\s+(.+)$", b.get("title", ""))
-        if m and m.group(1).strip() == series:
-            new_title = m.group(2).strip()
-        if new_title != orig_title:
-            changes["title"] = new_title
+        title = enrich.strip_series_from_title(title, series)
+        main, suffix = enrich.split_title_suffix(title)
+        if suffix and enrich.series_key(suffix) in enrich.alias_keys(series):
+            title = main  # ' – Die Dämonensaga' o. Ä. am Titelende
+    known = {x.get("publisher") for x in list_books(library) if x.get("publisher") and x.get("id") != book_id}
+    publisher = enrich.pick_publisher(record.get("publishers", []) + [
+        enrich.imprint_from_rights(info.get("rights")), info.get("publisher"), online.get("publisher"),
+        b.get("publisher")], known)
+    pubdate = "%d-01-01T12:00:00+00:00" % year if year else None
 
-    if "title" not in changes and b["title"] != orig_title:
-        changes["title"] = b["title"]
+    # 5. Änderungen sammeln
+    if title and title != cur_title:
+        changes["title"] = title
+    if authors and authors != cur_authors:
+        changes["authors"] = authors
+    cur_langs = b.get("languages") or []
+    if isinstance(cur_langs, str):
+        cur_langs = [cur_langs]
+    if language and cur_langs[:1] != [language]:
+        changes["languages"] = language
+    if publisher and publisher != b.get("publisher"):
+        changes["publisher"] = publisher
+    if pubdate and not str(b.get("pubdate") or "").startswith(pubdate[:10] + "T12:00"):
+        changes["pubdate"] = pubdate
+    if series and series != b.get("series"):
+        changes["series"] = series
+    if series and index and float(index) != float(b.get("series_index") or 0):
+        changes["series_index"] = index
+    wanted = {"isbn": isbn} if isbn else {}
+    if wanted != idents:
+        changes["identifiers"] = ",".join("%s:%s" % kv for kv in wanted.items())
+    if not b.get("comments") and comments:
+        changes["comments"] = comments
     if cover and enrich.better_cover(b.get("cover"), cover):
         changes["cover"] = cover
+
+    # Markierung, wenn keine verlässliche Quelle gefunden wurde -> von Hand prüfen
+    tags = [t.strip() for t in (b.get("tags") if isinstance(b.get("tags"), list)
+                                else str(b.get("tags") or "").split(",")) if t.strip()]
+    needs_review = not isbn or not found
+    new_tags = [t for t in tags if t != REVIEW_TAG] + ([REVIEW_TAG] if needs_review else [])
+    if new_tags != tags:
+        changes["tags"] = new_tags
+    if needs_review:
+        log.info("#%s: keine verlässlichen Daten gefunden – markiert als „%s“", book_id, REVIEW_TAG)
+
     if changes:
         log.info("Metadaten für #%s ergänzt: %s", book_id, ", ".join(sorted(changes)))
         set_metadata(library, book_id, changes, internal=True)
@@ -370,8 +411,8 @@ def enrich_book(library, book_id, auto=False):
         except OSError:
             pass
     labels = {"languages": "Sprache", "authors": "Autor", "identifiers": "ISBN", "comments": "Beschreibung",
-              "publisher": "Verlag", "pubdate": "Erscheinungsdatum", "series": "Reihe", "series_index": "Band",
-              "title": "Titel", "cover": "Cover"}
+              "publisher": "Verlag", "pubdate": "Erscheinungsjahr", "series": "Reihe", "series_index": "Band",
+              "title": "Titel", "cover": "Cover", "tags": "Markierung"}
     return [labels.get(k, k) for k in changes if k in labels]
 
 

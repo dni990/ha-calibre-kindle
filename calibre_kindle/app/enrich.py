@@ -100,7 +100,7 @@ def detect_language(text):
 
 # ---------------------------------------------------------------- Online
 
-def fetch_online(title, authors, isbn, timeout=90):
+def fetch_online(title, authors, isbn, timeout=30):
     """calibre-Metadatenquellen abfragen. Gibt dict + Pfad zum Cover zurück."""
     cover = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False).name
     cmd = ["fetch-ebook-metadata", "--opf", "--cover", cover, "--timeout", str(timeout)]
@@ -112,7 +112,7 @@ def fetch_online(title, authors, isbn, timeout=90):
         cmd += ["--authors", " & ".join(authors)]
     log.info("$ %s", " ".join(cmd))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 20)
     except subprocess.TimeoutExpired:
         return {}, None
     out = proc.stdout
@@ -280,7 +280,7 @@ def better_cover(current, candidate):
 # ---------------------------------------------------------------- Einheitliche Regeln
 # Werden bei jedem Import und bei „Online ergänzen“ angewendet und in die EPUB geschrieben.
 # RULES_VERSION erhöhen, wenn sich Regeln ändern -> beim nächsten Start werden alle Bücher neu angeglichen.
-RULES_VERSION = 4
+RULES_VERSION = 8
 
 LEGAL_FORMS = r"(?:GmbH\s*&\s*Co\.?\s*KG|GmbH|mbH|KG|AG|e\.\s?K\.|Ltd\.?|Limited|Inc\.?|LLC|S\.?p\.?A\.?|S\.?r\.?l\.?)"
 # Konzern-/Gruppennamen: hier steht nicht der eigentliche Verlag (Imprint)
@@ -377,6 +377,7 @@ def dnb_editions(title, author, timeout=20):
             if pm and pm.group(1).lower() == want:
                 result.append((isbn, clean_series(pm.group(2).strip()), pm.group(3).replace(",", ".")))
             continue
+        result.append((isbn, None, None))
         for field in re.findall(r'tag="(?:490|830)"[^>]*>(.*?)</datafield>', rec, re.S):
             a = re.search(r'code="a">([^<]+)', field)
             v = re.search(r'code="v">([^<]+)', field)
@@ -433,9 +434,165 @@ def alias_keys(name):
 def series_from_editions(editions):
     """Häufigste Reihe/Band über alle Ausgaben."""
     from collections import Counter
-    counts = Counter((series_key(n), idx) for _, n, idx in editions if idx)
+    counts = Counter((series_key(n), idx) for _, n, idx in editions if n and idx)
     if not counts:
         return None, None
     (key, idx), _ = counts.most_common(1)[0]
-    name = next(n for _, n, i in editions if series_key(n) == key)
+    name = next(n for _, n, i in editions if n and series_key(n) == key)
     return name, idx
+
+
+def series_title_hint(title):
+    """'Dämonen 4 - Der Thron der Finsternis' -> ('Der Thron der Finsternis', 'Dämonen', '4')."""
+    m = re.match(r"^(.+?)\s+(?:%s\s*)?(\d+(?:[.,]\d+)?)\s*[:–—-]\s+(.+)$" % SERIES_WORDS, title or "")
+    if m and not re.search(r"\d", m.group(1)) and not re.fullmatch(SERIES_WORDS, m.group(1).strip(), re.I):
+        return m.group(3).strip(), m.group(1).strip(" -–:"), m.group(2).replace(",", ".")
+    return title, None, None
+
+
+# ---------------------------------------------------------------- DNB-Datensatz per ISBN (Hauptquelle)
+
+def _dnb_xml(query, maximum=5, timeout=20):
+    import urllib.parse
+    import urllib.request
+    url = DNB_SRU + "?" + urllib.parse.urlencode({
+        "version": "1.1", "operation": "searchRetrieve", "query": query,
+        "recordSchema": "MARC21-xml", "maximumRecords": str(maximum)})
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            xml = resp.read().decode("utf-8", "replace")
+    except Exception as err:  # noqa: BLE001
+        log.info("DNB-Abfrage fehlgeschlagen: %s", err)
+        return ""
+    return xml.replace("&#152;", "").replace("&#156;", "")
+
+
+def _fields(rec, tag):
+    """[{code: [werte]}] aller Datenfelder mit diesem MARC-Tag."""
+    out = []
+    for body in re.findall(r'tag="%s"[^>]*>(.*?)</datafield>' % tag, rec, re.S):
+        sub = {}
+        for code, val in re.findall(r'code="(\w)">([^<]*)<', body):
+            sub.setdefault(code, []).append(clean_text(html.unescape(val)))
+        out.append(sub)
+    return out
+
+
+def _first(rec, tag, code):
+    for f in _fields(rec, tag):
+        if f.get(code):
+            return f[code][0]
+    return None
+
+
+def dnb_record(isbn):
+    """Katalogdaten der DNB zu genau dieser ISBN, oder None, wenn die DNB sie nicht kennt."""
+    if not isbn:
+        return None
+    xml = _dnb_xml("num=%s" % isbn)
+    for rec in xml.split("<record ")[1:]:
+        isbns = {clean_isbn(v) for f in _fields(rec, "020") for v in f.get("a", [])}
+        if isbn not in isbns:
+            continue
+        title = (_first(rec, "245", "a") or "").strip(" /:;")
+        authors = [flip_author(f["a"][0]) for f in _fields(rec, "100") if f.get("a")]
+        authors += [flip_author(f["a"][0]) for f in _fields(rec, "700")
+                    if f.get("a") and "aut" in f.get("4", []) and not f.get("t")]
+        series = index = None
+        for tag in ("490", "830"):
+            for f in _fields(rec, tag):
+                if f.get("a"):
+                    name, _, rest = f["a"][0].partition(";")
+                    num = re.search(r"\d+(?:[.,]\d+)?", (f.get("v") or [rest])[0] or "")
+                    series = clean_series(name.strip(" []"))
+                    index = num.group(0).replace(",", ".") if num else None
+                    break
+            if series:
+                break
+        if not series:
+            # Titel wie 'Das Lied der Dunkelheit (Demon Zyklus 1)'
+            m = re.match(r"^(.+?)\s*\((.+?),?\s+(?:%s\s*)?(\d+(?:[.,]\d+)?)\)$" % SERIES_WORDS, title)
+            if m:
+                title, series, index = m.group(1).strip(), clean_series(m.group(2)), m.group(3)
+        return {
+            "isbn": isbn,
+            "title": title or None,
+            "authors": authors,
+            "publishers": [f["b"][0] for f in _fields(rec, "264") if f.get("b")]
+                          or [f["b"][0] for f in _fields(rec, "260") if f.get("b")],
+            "year": year_of(_first(rec, "264", "c") or _first(rec, "260", "c")),
+            "language": norm_lang(_first(rec, "041", "a")),
+            "series": series,
+            "series_index": index,
+        }
+    return None
+
+
+def same_title(a, b):
+    """Titel gleich? (ohne Artikel-/Satzzeichen-Unterschiede, Untertitel/Reihenzusatz egal)."""
+    def norm(t):
+        t = split_title_suffix(clean_text(t or ""))[0].lower()
+        t = re.sub(r"\s*\(.*?\)\s*$", "", t)
+        return re.sub(r"[^a-zäöüß0-9]+", " ", t).strip()
+    na, nb = norm(a), norm(b)
+    return bool(na) and (na == nb or na.startswith(nb + " ") or nb.startswith(na + " "))
+
+
+def pick_publisher(candidates, known):
+    """Erster Kandidat, der kein Konzernname ist; Schreibweise aus der Bibliothek übernehmen."""
+    cands = [c for c in candidates if c]
+    pick = next((c for c in cands if not GROUP_PATTERN.search(c)), None) or (cands[0] if cands else None)
+    if not pick:
+        return None
+    pick = clean_publisher(pick)
+    core = publisher_core(pick)
+    if core:
+        for k in sorted(known, key=len):
+            kc = publisher_core(k)
+            if kc and not GROUP_PATTERN.search(k) and core[-len(kc):] == kc:
+                return k
+    return pick
+
+
+# ---------------------------------------------------------------- Cover/Beschreibung direkt per ISBN
+
+def dnb_cover(isbn, timeout=20):
+    """Cover vom DNB-Coverdienst (Verlagscover, farbig). Pfad zu einer Temp-Datei oder None."""
+    import urllib.request
+    if not isbn:
+        return None
+    path = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False).name
+    try:
+        req = urllib.request.Request("https://portal.dnb.de/opac/mvb/cover?isbn=%s" % isbn,
+                                     headers={"User-Agent": "calibre-kindle-addon"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(path, "wb") as f:
+            f.write(resp.read())
+    except Exception as err:  # noqa: BLE001
+        log.info("Kein DNB-Cover für %s: %s", isbn, err)
+        os.remove(path)
+        return None
+    w, h, _ = image_info(path)
+    if w < 200 or h < 200:
+        os.remove(path)
+        return None
+    return path
+
+
+def google_description(isbn, timeout=20):
+    """Klappentext über die Google-Books-API (eine Anfrage per ISBN)."""
+    import json
+    import urllib.request
+    if not isbn:
+        return None
+    try:
+        with urllib.request.urlopen("https://www.googleapis.com/books/v1/volumes?q=isbn:%s" % isbn,
+                                    timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as err:  # noqa: BLE001
+        log.info("Google Books für %s nicht erreichbar: %s", isbn, err)
+        return None
+    for item in data.get("items") or []:
+        desc = (item.get("volumeInfo") or {}).get("description")
+        if desc:
+            return "<p>%s</p>" % html.escape(desc) if "<" not in desc else desc
+    return None
